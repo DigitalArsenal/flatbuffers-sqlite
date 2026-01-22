@@ -3,64 +3,105 @@
 
 #include "flatsql/types.h"
 #include <functional>
+#include <map>
+#include <optional>
+#include <string_view>
 
 namespace flatsql {
 
 /**
- * Stacked FlatBuffer storage.
+ * Streaming FlatBuffer storage.
  *
- * File format:
- *   [FileHeader: 64 bytes]
- *   [RecordHeader: 48 bytes][FlatBuffer data: variable]
- *   [RecordHeader: 48 bytes][FlatBuffer data: variable]
- *   ...
+ * Storage format (raw FlatBuffer stream):
+ *   [4-byte size][FlatBuffer][4-byte size][FlatBuffer]...
  *
- * Each FlatBuffer is a complete, valid FlatBuffer that can be read
- * independently by standard FlatBuffer tools.
+ * Each FlatBuffer must contain a file_identifier at bytes 4-7.
+ * The library reads:
+ *   1. Size prefix (4 bytes, little-endian) → how many bytes to read
+ *   2. FlatBuffer data (size bytes)
+ *   3. File identifier (bytes 4-7 of FlatBuffer) → routes to table
+ *
+ * This is a pure streaming format - no custom headers, no conversion.
+ * Indexes are built during streaming ingest.
  */
-class StackedFlatBufferStore {
+class StreamingFlatBufferStore {
 public:
-    explicit StackedFlatBufferStore(const std::string& schemaName,
-                                     size_t initialCapacity = 1024 * 1024);
+    // Callback invoked for each FlatBuffer during streaming ingest
+    // Parameters: file_id (4 bytes), data pointer, data length, assigned sequence, offset
+    using IngestCallback = std::function<void(
+        std::string_view fileId,
+        const uint8_t* data,
+        size_t length,
+        uint64_t sequence,
+        uint64_t offset
+    )>;
 
-    // Load from existing data
-    static StackedFlatBufferStore fromData(const std::vector<uint8_t>& data);
-    static StackedFlatBufferStore fromData(const uint8_t* data, size_t length);
+    explicit StreamingFlatBufferStore(size_t initialCapacity = 1024 * 1024);
 
-    // Append a FlatBuffer record, returns offset where stored
-    uint64_t append(const std::string& tableName, const std::vector<uint8_t>& flatbufferData);
-    uint64_t append(const std::string& tableName, const uint8_t* data, size_t length);
+    // Stream raw size-prefixed FlatBuffers
+    // Calls callback for each complete FlatBuffer ingested
+    // Returns number of bytes consumed (for buffer management)
+    // Sets recordsProcessed to number of complete FlatBuffers processed
+    size_t ingest(const uint8_t* data, size_t length, IngestCallback callback, size_t* recordsProcessed = nullptr);
 
-    // Read a record at offset
-    StoredRecord readRecord(uint64_t offset) const;
+    // Ingest a single size-prefixed FlatBuffer, returns sequence
+    uint64_t ingestOne(const uint8_t* sizePrefixedData, size_t length, IngestCallback callback);
+
+    // Ingest a single FlatBuffer (without size prefix), returns sequence
+    uint64_t ingestFlatBuffer(const uint8_t* data, size_t length, IngestCallback callback);
+
+    // Load existing stream data and rebuild via callback
+    void loadAndRebuild(const uint8_t* data, size_t length, IngestCallback callback);
+
+    // Read raw FlatBuffer at offset (returns pointer into storage, no copy)
+    const uint8_t* getDataAtOffset(uint64_t offset, uint32_t* outLength) const;
+
+    // Read a record by offset
+    StoredRecord readRecordAtOffset(uint64_t offset) const;
+
+    // Read a record by sequence
+    StoredRecord readRecord(uint64_t sequence) const;
+
+    // Check if sequence exists
+    bool hasRecord(uint64_t sequence) const;
+
+    // Get offset for sequence
+    std::optional<uint64_t> getOffsetForSequence(uint64_t sequence) const;
 
     // Iterate all records
     void iterateRecords(std::function<bool(const StoredRecord&)> callback) const;
 
-    // Iterate records for a specific table
-    void iterateTableRecords(const std::string& tableName,
-                             std::function<bool(const StoredRecord&)> callback) const;
+    // Iterate records with specific file identifier
+    void iterateByFileId(std::string_view fileId,
+                         std::function<bool(const StoredRecord&)> callback) const;
 
-    // Get raw data for export
+    // Export raw stream data
     const std::vector<uint8_t>& getData() const { return data_; }
-    std::vector<uint8_t> getDataCopy() const { return std::vector<uint8_t>(data_.begin(), data_.begin() + writeOffset_); }
+    std::vector<uint8_t> exportData() const {
+        return std::vector<uint8_t>(data_.begin(), data_.begin() + writeOffset_);
+    }
 
     // Statistics
     uint64_t getRecordCount() const { return recordCount_; }
-    const std::string& getSchemaName() const { return schemaName_; }
     uint64_t getDataSize() const { return writeOffset_; }
 
+    // Extract file identifier from a FlatBuffer (bytes 4-7)
+    static std::string extractFileId(const uint8_t* flatbuffer, size_t length);
+
 private:
-    void writeFileHeader();
-    void updateFileHeader();
     void ensureCapacity(size_t needed);
 
     std::vector<uint8_t> data_;
-    uint64_t writeOffset_;
+    uint64_t writeOffset_ = 0;
     uint64_t recordCount_ = 0;
-    uint64_t sequence_ = 0;
-    std::string schemaName_;
+    uint64_t nextSequence_ = 1;
+
+    // sequence → offset for O(1) lookups
+    std::map<uint64_t, uint64_t> sequenceToOffset_;
 };
+
+// Backwards compatibility alias
+using StackedFlatBufferStore = StreamingFlatBufferStore;
 
 }  // namespace flatsql
 

@@ -1,0 +1,24 @@
+// Test schema for FlatSQL integration tests
+
+namespace test;
+
+// Each table has a unique 4-byte file identifier for streaming routing
+table User {
+    id: int32 (id: 0);
+    name: string (id: 1);
+    email: string (id: 2);
+    age: int32 (id: 3);
+}
+
+table Post {
+    id: int32 (id: 0);
+    user_id: int32 (id: 1);
+    title: string (id: 2);
+    content: string (id: 3);
+}
+
+// File identifiers for streaming - library reads these to route to correct table
+file_identifier "USER";
+root_type User;
+
+// Note: For Post, create with file_identifier "POST" when building

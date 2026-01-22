@@ -11,11 +11,12 @@
 
 namespace flatsql {
 
-// File format constants
-constexpr uint32_t MAGIC = 0x464C5351;  // "FLSQ"
-constexpr uint32_t VERSION = 1;
-constexpr size_t FILE_HEADER_SIZE = 64;
-constexpr size_t RECORD_HEADER_SIZE = 48;
+// Streaming format constants
+// FlatBuffers are stored as: [4-byte size prefix][FlatBuffer data]
+// The file identifier is read from bytes 4-7 of the FlatBuffer itself
+constexpr size_t SIZE_PREFIX_LENGTH = 4;
+constexpr size_t FILE_IDENTIFIER_OFFSET = 4;  // Offset within FlatBuffer
+constexpr size_t FILE_IDENTIFIER_LENGTH = 4;
 
 // Value types supported in FlatSQL
 enum class ValueType {
@@ -98,13 +99,11 @@ struct DatabaseSchema {
     }
 };
 
-// Record header (stored before each FlatBuffer in the stacked file)
+// Record metadata (derived from raw FlatBuffer stream, not stored separately)
 struct RecordHeader {
-    uint64_t sequence;
-    std::string tableName;  // max 15 chars
-    uint64_t timestamp;
-    uint32_t dataLength;
-    uint32_t checksum;
+    uint64_t sequence;      // Assigned during ingest
+    std::string fileId;     // 4-byte file identifier from FlatBuffer (bytes 4-7)
+    uint32_t dataLength;    // Size of FlatBuffer (from size prefix)
 };
 
 // A stored record

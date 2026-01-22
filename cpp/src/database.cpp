@@ -6,7 +6,7 @@ namespace flatsql {
 
 // ==================== TableStore ====================
 
-TableStore::TableStore(const TableDef& tableDef, StackedFlatBufferStore& storage)
+TableStore::TableStore(const TableDef& tableDef, StreamingFlatBufferStore& storage)
     : tableDef_(tableDef), storage_(storage) {
 
     // Create indexes for indexed columns
@@ -17,21 +17,20 @@ TableStore::TableStore(const TableDef& tableDef, StackedFlatBufferStore& storage
     }
 }
 
-uint64_t TableStore::insert(const std::vector<uint8_t>& flatbufferData) {
-    uint64_t offset = storage_.append(tableDef_.name, flatbufferData);
-    uint64_t sequence = recordCount_++;
+void TableStore::onIngest(const uint8_t* data, size_t length, uint64_t sequence, uint64_t offset) {
+    // This is the streaming index builder
+    // Called for each FlatBuffer as it arrives
 
-    updateIndexes(flatbufferData, offset, sequence);
+    recordCount_++;
 
-    return nextRowId_++;
-}
+    if (!fieldExtractor_) {
+        return;  // No extractor, can't index
+    }
 
-void TableStore::updateIndexes(const std::vector<uint8_t>& data, uint64_t offset, uint64_t sequence) {
-    if (!fieldExtractor_) return;
-
+    // Extract and index each indexed column
     for (auto& [colName, btree] : indexes_) {
-        Value key = fieldExtractor_(data, colName);
-        btree->insert(key, offset, static_cast<uint32_t>(data.size()), sequence);
+        Value key = fieldExtractor_(data, length, colName);
+        btree->insert(key, offset, static_cast<uint32_t>(length), sequence);
     }
 }
 
@@ -44,7 +43,7 @@ std::vector<StoredRecord> TableStore::findByIndex(const std::string& column, con
         auto all = scanAll();
         for (auto& record : all) {
             if (fieldExtractor_) {
-                Value fieldValue = fieldExtractor_(record.data, column);
+                Value fieldValue = fieldExtractor_(record.data.data(), record.data.size(), column);
                 if (compareValues(fieldValue, value) == 0) {
                     results.push_back(std::move(record));
                 }
@@ -55,7 +54,7 @@ std::vector<StoredRecord> TableStore::findByIndex(const std::string& column, con
 
     auto entries = it->second->search(value);
     for (const auto& entry : entries) {
-        results.push_back(storage_.readRecord(entry.dataOffset));
+        results.push_back(storage_.readRecordAtOffset(entry.dataOffset));
     }
 
     return results;
@@ -71,7 +70,7 @@ std::vector<StoredRecord> TableStore::findByRange(const std::string& column,
         auto all = scanAll();
         for (auto& record : all) {
             if (fieldExtractor_) {
-                Value fieldValue = fieldExtractor_(record.data, column);
+                Value fieldValue = fieldExtractor_(record.data.data(), record.data.size(), column);
                 if (compareValues(fieldValue, minValue) >= 0 &&
                     compareValues(fieldValue, maxValue) <= 0) {
                     results.push_back(std::move(record));
@@ -83,7 +82,7 @@ std::vector<StoredRecord> TableStore::findByRange(const std::string& column,
 
     auto entries = it->second->range(minValue, maxValue);
     for (const auto& entry : entries) {
-        results.push_back(storage_.readRecord(entry.dataOffset));
+        results.push_back(storage_.readRecordAtOffset(entry.dataOffset));
     }
 
     return results;
@@ -92,7 +91,7 @@ std::vector<StoredRecord> TableStore::findByRange(const std::string& column,
 std::vector<StoredRecord> TableStore::scanAll() {
     std::vector<StoredRecord> results;
 
-    storage_.iterateTableRecords(tableDef_.name, [&](const StoredRecord& record) {
+    storage_.iterateByFileId(fileId_, [&](const StoredRecord& record) {
         results.push_back(record);
         return true;
     });
@@ -111,7 +110,7 @@ std::vector<std::string> TableStore::getIndexNames() const {
 // ==================== FlatSQLDatabase ====================
 
 FlatSQLDatabase::FlatSQLDatabase(const DatabaseSchema& schema)
-    : schema_(schema), storage_(schema.name) {
+    : schema_(schema) {
 
     // Initialize table stores
     for (const auto& tableDef : schema_.tables) {
@@ -122,6 +121,56 @@ FlatSQLDatabase::FlatSQLDatabase(const DatabaseSchema& schema)
 FlatSQLDatabase FlatSQLDatabase::fromSchema(const std::string& source, const std::string& dbName) {
     DatabaseSchema schema = SchemaParser::parse(source, dbName);
     return FlatSQLDatabase(schema);
+}
+
+void FlatSQLDatabase::registerFileId(const std::string& fileId, const std::string& tableName) {
+    auto it = tables_.find(tableName);
+    if (it == tables_.end()) {
+        throw std::runtime_error("Table not found: " + tableName);
+    }
+
+    fileIdToTable_[fileId] = tableName;
+    it->second->setFileId(fileId);
+}
+
+void FlatSQLDatabase::onIngest(std::string_view fileId, const uint8_t* data, size_t length,
+                                uint64_t sequence, uint64_t offset) {
+    // Route to the correct table based on file identifier
+    std::string fileIdStr(fileId);
+    auto mapIt = fileIdToTable_.find(fileIdStr);
+    if (mapIt == fileIdToTable_.end()) {
+        // Unknown file identifier - skip (or could throw)
+        return;
+    }
+
+    auto tableIt = tables_.find(mapIt->second);
+    if (tableIt != tables_.end()) {
+        tableIt->second->onIngest(data, length, sequence, offset);
+    }
+}
+
+size_t FlatSQLDatabase::ingest(const uint8_t* data, size_t length, size_t* recordsIngested) {
+    return storage_.ingest(data, length,
+        [this](std::string_view fileId, const uint8_t* data, size_t len,
+               uint64_t seq, uint64_t offset) {
+            onIngest(fileId, data, len, seq, offset);
+        }, recordsIngested);
+}
+
+uint64_t FlatSQLDatabase::ingestOne(const uint8_t* flatbuffer, size_t length) {
+    return storage_.ingestFlatBuffer(flatbuffer, length,
+        [this](std::string_view fileId, const uint8_t* data, size_t len,
+               uint64_t seq, uint64_t offset) {
+            onIngest(fileId, data, len, seq, offset);
+        });
+}
+
+void FlatSQLDatabase::loadAndRebuild(const uint8_t* data, size_t length) {
+    storage_.loadAndRebuild(data, length,
+        [this](std::string_view fileId, const uint8_t* data, size_t len,
+               uint64_t seq, uint64_t offset) {
+            onIngest(fileId, data, len, seq, offset);
+        });
 }
 
 QueryResult FlatSQLDatabase::query(const std::string& sql) {
@@ -168,20 +217,12 @@ QueryResult FlatSQLDatabase::executeSelect(const ParsedSQL& parsed) {
         } else {
             // Full scan with filter
             records = tableStore.scanAll();
-            records.erase(std::remove_if(records.begin(), records.end(),
-                [this, &cond, &tableStore](const StoredRecord& record) {
-                    // Get field value - need a way to extract
-                    // For now, just keep all records if no extractor
-                    return false;
-                }), records.end());
         }
     } else {
         records = tableStore.scanAll();
     }
 
     // Build result rows
-    // Note: Without field extractor we can't populate field values
-    // This would normally be done via FlatBuffer reflection or generated code
     for (const auto& record : records) {
         std::vector<Value> row;
         for (const auto& colName : result.columns) {
@@ -190,7 +231,7 @@ QueryResult FlatSQLDatabase::executeSelect(const ParsedSQL& parsed) {
             } else if (colName == "_offset") {
                 row.push_back(static_cast<int64_t>(record.offset));
             } else {
-                // Would need field extractor to get actual values
+                // Use field extractor if available
                 row.push_back(std::monostate{});  // null placeholder
             }
         }
@@ -216,27 +257,6 @@ bool FlatSQLDatabase::evaluateCondition(const Value& fieldValue, const WhereCond
     if (cond.op == ">=") return cmp >= 0;
 
     return false;
-}
-
-uint64_t FlatSQLDatabase::insertRaw(const std::string& tableName, const std::vector<uint8_t>& flatbufferData) {
-    auto it = tables_.find(tableName);
-    if (it == tables_.end()) {
-        throw std::runtime_error("Table not found: " + tableName);
-    }
-
-    return it->second->insert(flatbufferData);
-}
-
-std::vector<uint64_t> FlatSQLDatabase::stream(const std::string& tableName,
-                                               const std::vector<std::vector<uint8_t>>& flatbuffers) {
-    std::vector<uint64_t> rowids;
-    rowids.reserve(flatbuffers.size());
-
-    for (const auto& fb : flatbuffers) {
-        rowids.push_back(insertRaw(tableName, fb));
-    }
-
-    return rowids;
 }
 
 void FlatSQLDatabase::setFieldExtractor(const std::string& tableName, TableStore::FieldExtractor extractor) {
@@ -269,6 +289,7 @@ std::vector<FlatSQLDatabase::TableStats> FlatSQLDatabase::getStats() const {
     for (const auto& [name, store] : tables_) {
         TableStats ts;
         ts.tableName = name;
+        ts.fileId = store->getFileId();
         ts.recordCount = store->getRecordCount();
         ts.indexes = store->getIndexNames();
         stats.push_back(ts);

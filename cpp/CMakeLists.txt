@@ -16,13 +16,19 @@ endif()
 
 message(STATUS "FlatBuffers include dir: ${FLATBUFFERS_INCLUDE_DIR}")
 
-# Source files
-set(FLATSQL_SOURCES
+# Source files (library - no main)
+set(FLATSQL_LIB_SOURCES
     src/storage.cpp
     src/btree.cpp
     src/schema_parser.cpp
     src/sql_parser.cpp
     src/database.cpp
+    src/junction.cpp
+)
+
+# Sources for WASM build (includes bindings)
+set(FLATSQL_WASM_SOURCES
+    ${FLATSQL_LIB_SOURCES}
     src/flatsql.cpp
 )
 
@@ -32,6 +38,7 @@ set(FLATSQL_HEADERS
     include/flatsql/schema_parser.h
     include/flatsql/sql_parser.h
     include/flatsql/database.h
+    include/flatsql/junction.h
     include/flatsql/types.h
 )
 
@@ -47,7 +54,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions")
 
     # Create the WASM library
-    add_executable(flatsql ${FLATSQL_SOURCES})
+    add_executable(flatsql ${FLATSQL_WASM_SOURCES})
 
     target_include_directories(flatsql PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -80,17 +87,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
     message(STATUS "Output: flatsql.js + flatsql.wasm")
 
 else()
-    message(STATUS "Native build (for testing)")
+    message(STATUS "Native build (for testing and CLI)")
 
-    # Native library for testing
-    add_library(flatsql_lib STATIC ${FLATSQL_SOURCES})
+    # Native library
+    add_library(flatsql_lib STATIC ${FLATSQL_LIB_SOURCES})
 
     target_include_directories(flatsql_lib PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${FLATBUFFERS_INCLUDE_DIR}
     )
 
-    # Native test executable
+    # Native CLI executable (with stdin piping support)
+    add_executable(flatsql src/flatsql.cpp)
+    target_link_libraries(flatsql PRIVATE flatsql_lib)
+    target_include_directories(flatsql PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${FLATBUFFERS_INCLUDE_DIR}
+    )
+
+    # Native test executable (basic unit tests)
     add_executable(flatsql_test test/test_main.cpp)
     target_link_libraries(flatsql_test PRIVATE flatsql_lib)
     target_include_directories(flatsql_test PRIVATE
@@ -98,6 +113,26 @@ else()
         ${FLATBUFFERS_INCLUDE_DIR}
     )
 
+    # Integration test (uses real FlatBuffer generated code)
+    add_executable(flatsql_integration_test test/integration_test.cpp)
+    target_link_libraries(flatsql_integration_test PRIVATE flatsql_lib)
+    target_include_directories(flatsql_integration_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+        ${FLATBUFFERS_INCLUDE_DIR}
+    )
+
+    # Socket streaming test (Unix domain socket streaming)
+    add_executable(flatsql_socket_test test/socket_stream_test.cpp)
+    target_link_libraries(flatsql_socket_test PRIVATE flatsql_lib)
+    target_include_directories(flatsql_socket_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+        ${FLATBUFFERS_INCLUDE_DIR}
+    )
+
     enable_testing()
     add_test(NAME FlatSQLTest COMMAND flatsql_test)
+    add_test(NAME FlatSQLIntegrationTest COMMAND flatsql_integration_test)
+    add_test(NAME FlatSQLSocketTest COMMAND flatsql_socket_test)
 endif()
