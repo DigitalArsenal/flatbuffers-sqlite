@@ -56,8 +56,11 @@ public:
     // Read raw FlatBuffer at offset (returns pointer into storage, no copy)
     const uint8_t* getDataAtOffset(uint64_t offset, uint32_t* outLength) const;
 
-    // Read a record by offset
+    // Read a record by offset (copies data)
     StoredRecord readRecordAtOffset(uint64_t offset) const;
+
+    // Get sequence number for offset (O(1) lookup)
+    uint64_t getSequenceForOffset(uint64_t offset) const;
 
     // Read a record by sequence
     StoredRecord readRecord(uint64_t sequence) const;
@@ -75,6 +78,33 @@ public:
     void iterateByFileId(std::string_view fileId,
                          std::function<bool(const StoredRecord&)> callback) const;
 
+    // Lightweight iteration - no data copy, just offset/sequence/pointer
+    struct RecordRef {
+        uint64_t offset;
+        uint64_t sequence;
+        const uint8_t* data;
+        uint32_t length;
+    };
+    void iterateRefsByFileId(std::string_view fileId,
+                             std::function<bool(const RecordRef&)> callback) const;
+
+    // Record info for indexed access
+    struct FileRecordInfo {
+        uint64_t offset;
+        uint64_t sequence;
+    };
+
+    // Get next record after the given offset, returns false if no more records
+    // For lazy iteration without building a vector of all records
+    bool getNextRecord(uint64_t afterOffset, std::string_view fileId,
+                       uint64_t* outOffset, uint64_t* outSequence,
+                       const uint8_t** outData, uint32_t* outLength) const;
+
+    // Get first record with file ID, returns false if none
+    bool getFirstRecord(std::string_view fileId,
+                        uint64_t* outOffset, uint64_t* outSequence,
+                        const uint8_t** outData, uint32_t* outLength) const;
+
     // Export raw stream data
     const std::vector<uint8_t>& getData() const { return data_; }
     std::vector<uint8_t> exportData() const {
@@ -88,8 +118,25 @@ public:
     // Extract file identifier from a FlatBuffer (bytes 4-7)
     static std::string extractFileId(const uint8_t* flatbuffer, size_t length);
 
+    // Get record by index within file ID (O(1) random access)
+    // Returns false if index out of bounds
+    bool getRecordByFileIndex(std::string_view fileId, size_t index,
+                              uint64_t* outOffset, uint64_t* outSequence,
+                              const uint8_t** outData, uint32_t* outLength) const;
+
+    // Get count of records for a file ID
+    size_t getRecordCountByFileId(std::string_view fileId) const;
+
+    // Get direct pointer to record info vector (avoids map lookup per iteration)
+    const std::vector<FileRecordInfo>* getRecordInfoVector(std::string_view fileId) const;
+
+    // Get direct access to underlying storage buffer (for inline iteration)
+    const uint8_t* getDataBuffer() const { return data_.data(); }
+    uint64_t getWriteOffset() const { return writeOffset_; }
+
 private:
     void ensureCapacity(size_t needed);
+    void indexRecord(const std::string& fileId, uint64_t offset);
 
     std::vector<uint8_t> data_;
     uint64_t writeOffset_ = 0;
@@ -101,6 +148,9 @@ private:
 
     // offset → sequence for reverse lookups (O(1) instead of O(n))
     std::unordered_map<uint64_t, uint64_t> offsetToSequence_;
+
+    // fileId → list of record info for O(1) iteration by file type
+    std::unordered_map<std::string, std::vector<FileRecordInfo>> fileIdToRecords_;
 };
 
 // Backwards compatibility alias

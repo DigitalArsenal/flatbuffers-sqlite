@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(FlatSQL VERSION 1.0.0 LANGUAGES CXX)
+project(FlatSQL VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,14 +16,21 @@ endif()
 
 message(STATUS "FlatBuffers include dir: ${FLATBUFFERS_INCLUDE_DIR}")
 
+# SQLite amalgamation (vendored)
+set(SQLITE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite")
+if(NOT EXISTS "${SQLITE_DIR}/sqlite3.c")
+    message(FATAL_ERROR "SQLite amalgamation not found at ${SQLITE_DIR}")
+endif()
+
 # Source files (library - no main)
 set(FLATSQL_LIB_SOURCES
     src/storage.cpp
     src/btree.cpp
     src/schema_parser.cpp
-    src/sql_parser.cpp
     src/database.cpp
     src/junction.cpp
+    src/sqlite_vtab.cpp
+    src/sqlite_engine.cpp
 )
 
 # Sources for WASM build (includes bindings)
@@ -36,10 +43,11 @@ set(FLATSQL_HEADERS
     include/flatsql/storage.h
     include/flatsql/btree.h
     include/flatsql/schema_parser.h
-    include/flatsql/sql_parser.h
     include/flatsql/database.h
     include/flatsql/junction.h
     include/flatsql/types.h
+    include/flatsql/sqlite_vtab.h
+    include/flatsql/sqlite_engine.h
 )
 
 # Emscripten/WASM configuration
@@ -52,13 +60,27 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
 
     # WASM-specific compiler flags
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexceptions")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 
-    # Create the WASM library
-    add_executable(flatsql ${FLATSQL_WASM_SOURCES})
+    # Create the WASM library (includes SQLite amalgamation directly)
+    add_executable(flatsql ${FLATSQL_WASM_SOURCES} ${SQLITE_DIR}/sqlite3.c)
 
     target_include_directories(flatsql PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
+    )
+
+    # SQLite compile definitions for minimal WASM build
+    target_compile_definitions(flatsql PRIVATE
+        SQLITE_THREADSAFE=0
+        SQLITE_OMIT_LOAD_EXTENSION=1
+        SQLITE_OMIT_WAL=1
+        SQLITE_OMIT_DEPRECATED=1
+        SQLITE_OMIT_SHARED_CACHE=1
+        SQLITE_OMIT_PROGRESS_CALLBACK=1
+        SQLITE_DEFAULT_MEMSTATUS=0
+        SQLITE_DQS=0
     )
 
     # Emscripten link flags for WASM output
@@ -98,13 +120,30 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
 else()
     message(STATUS "Native build (for testing and CLI)")
 
+    # SQLite static library (from amalgamation)
+    add_library(sqlite3 STATIC ${SQLITE_DIR}/sqlite3.c)
+    target_include_directories(sqlite3 PUBLIC ${SQLITE_DIR})
+    target_compile_definitions(sqlite3 PRIVATE
+        SQLITE_THREADSAFE=0
+        SQLITE_OMIT_LOAD_EXTENSION=1
+        SQLITE_OMIT_WAL=1
+        SQLITE_OMIT_DEPRECATED=1
+        SQLITE_DQS=0
+    )
+    # Suppress warnings in SQLite code
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(sqlite3 PRIVATE -w)
+    endif()
+
     # Native library
     add_library(flatsql_lib STATIC ${FLATSQL_LIB_SOURCES})
 
     target_include_directories(flatsql_lib PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
     )
+    target_link_libraries(flatsql_lib PUBLIC sqlite3)
 
     # Native CLI executable (with stdin piping support)
     add_executable(flatsql src/flatsql.cpp)
@@ -112,6 +151,7 @@ else()
     target_include_directories(flatsql PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
     )
 
     # Native test executable (basic unit tests)
@@ -120,6 +160,7 @@ else()
     target_include_directories(flatsql_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
     )
 
     # Integration test (uses real FlatBuffer generated code)
@@ -129,6 +170,7 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/schemas
         ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
     )
 
     # Socket streaming test (Unix domain socket streaming)
@@ -138,40 +180,21 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/schemas
         ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
     )
 
-    # Benchmark: FlatSQL vs SQLite
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(SQLITE3 sqlite3)
-    endif()
-
-    if(NOT SQLITE3_FOUND)
-        # Try to find SQLite3 manually (Homebrew on macOS)
-        find_path(SQLITE3_INCLUDE_DIRS sqlite3.h
-            HINTS /opt/homebrew/include /usr/local/include /usr/include)
-        find_library(SQLITE3_LIBRARIES sqlite3
-            HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
-        if(SQLITE3_INCLUDE_DIRS AND SQLITE3_LIBRARIES)
-            set(SQLITE3_FOUND TRUE)
-        endif()
-    endif()
-
-    if(SQLITE3_FOUND)
-        message(STATUS "SQLite3 found - building benchmark")
-        add_executable(flatsql_benchmark test/benchmark.cpp)
-        target_link_libraries(flatsql_benchmark PRIVATE flatsql_lib ${SQLITE3_LIBRARIES})
-        target_include_directories(flatsql_benchmark PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/schemas
-            ${FLATBUFFERS_INCLUDE_DIR}
-            ${SQLITE3_INCLUDE_DIRS}
-        )
-        # Optimize for benchmark
-        target_compile_options(flatsql_benchmark PRIVATE -O3)
-    else()
-        message(STATUS "SQLite3 not found - skipping benchmark")
-    endif()
+    # Benchmark: FlatSQL vs SQLite (using vendored SQLite)
+    message(STATUS "Building benchmark with vendored SQLite")
+    add_executable(flatsql_benchmark test/benchmark.cpp)
+    target_link_libraries(flatsql_benchmark PRIVATE flatsql_lib)
+    target_include_directories(flatsql_benchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+        ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
+    )
+    # Optimize for benchmark
+    target_compile_options(flatsql_benchmark PRIVATE -O3)
 
     enable_testing()
     add_test(NAME FlatSQLTest COMMAND flatsql_test)

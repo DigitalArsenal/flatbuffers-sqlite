@@ -138,9 +138,9 @@ void testStoreAndRetrieve() {
     db.ingestOne(post2.data(), post2.size());
     db.ingestOne(post3.data(), post3.size());
 
-    // Query all users
-    std::cout << "  Querying SELECT * FROM User..." << std::endl;
-    auto result = db.query("SELECT * FROM User");
+    // Query all users (use explicit columns to avoid virtual columns)
+    std::cout << "  Querying SELECT id, name, email, age FROM User..." << std::endl;
+    auto result = db.query("SELECT id, name, email, age FROM User");
 
     assert(result.rowCount() == 3);
     std::cout << "    Found " << result.rowCount() << " users" << std::endl;

@@ -5,7 +5,8 @@
 #include "flatsql/storage.h"
 #include "flatsql/btree.h"
 #include "flatsql/schema_parser.h"
-#include "flatsql/sql_parser.h"
+#include "flatsql/sqlite_engine.h"
+#include <set>
 
 namespace flatsql {
 
@@ -48,12 +49,32 @@ public:
 
     // Field extractor function type - extracts field values from raw FlatBuffer
     using FieldExtractor = std::function<Value(const uint8_t* data, size_t length, const std::string& fieldName)>;
+    using FastFieldExtractor = flatsql::FastFieldExtractor;
+    using BatchExtractor = flatsql::BatchExtractor;
 
     // Set field extractor (required for indexing and queries)
     void setFieldExtractor(FieldExtractor extractor) { fieldExtractor_ = extractor; }
 
+    // Set fast field extractor (optional, for bypassing Value construction)
+    void setFastFieldExtractor(FastFieldExtractor extractor) { fastFieldExtractor_ = extractor; }
+
+    // Set batch extractor (optional, for efficient batch extraction)
+    void setBatchExtractor(BatchExtractor extractor) { batchExtractor_ = extractor; }
+
     // Get field extractor
     FieldExtractor getFieldExtractor() const { return fieldExtractor_; }
+
+    // Get fast field extractor
+    FastFieldExtractor getFastFieldExtractor() const { return fastFieldExtractor_; }
+
+    // Get batch extractor
+    BatchExtractor getBatchExtractor() const { return batchExtractor_; }
+
+    // Get index for a column (returns nullptr if not indexed)
+    BTree* getIndex(const std::string& columnName) {
+        auto it = indexes_.find(columnName);
+        return it != indexes_.end() ? it->second.get() : nullptr;
+    }
 
 private:
     TableDef tableDef_;
@@ -62,13 +83,22 @@ private:
     std::map<std::string, std::unique_ptr<BTree>> indexes_;
     uint64_t recordCount_ = 0;
     FieldExtractor fieldExtractor_;
+    FastFieldExtractor fastFieldExtractor_;
+    BatchExtractor batchExtractor_ = nullptr;
 };
 
 /**
  * FlatSQL Database: SQL interface over FlatBuffer storage.
  *
- * Supports streaming ingest of raw size-prefixed FlatBuffers.
- * File identifiers route records to the correct table for indexing.
+ * Uses SQLite virtual tables for mature SQL support while keeping
+ * FlatBuffers as the storage/transfer format.
+ *
+ * Supports:
+ * - Streaming ingest of raw size-prefixed FlatBuffers
+ * - File identifier routing to tables
+ * - Multiple sources with same schema (multi-source queries)
+ * - Unified views for cross-source queries
+ * - Tombstone-based deletes with compaction
  */
 class FlatSQLDatabase {
 public:
@@ -95,11 +125,71 @@ public:
     // Load existing stream data and rebuild indexes
     void loadAndRebuild(const uint8_t* data, size_t length);
 
-    // Execute SQL query
+    // Execute SQL query (uses SQLite virtual tables)
     QueryResult query(const std::string& sql);
 
-    // Set field extractor for a table (required for indexing)
+    // Execute SQL query with parameters (faster for repeated queries)
+    QueryResult query(const std::string& sql, const std::vector<Value>& params);
+
+    // Execute SQL query with a single integer parameter (most optimized for int key lookups)
+    QueryResult query(const std::string& sql, int64_t param);
+
+    // Execute and count without building QueryResult (for benchmarking)
+    size_t queryCount(const std::string& sql, const std::vector<Value>& params = {});
+
+    // Direct point lookup - bypasses SQLite for maximum speed
+    // Returns records matching the given column value
+    std::vector<StoredRecord> findByIndex(const std::string& tableName,
+                                          const std::string& column,
+                                          const Value& value);
+
+    // Direct point lookup for unique keys - returns true if found
+    // Most efficient for primary key lookups
+    bool findOneByIndex(const std::string& tableName,
+                        const std::string& column,
+                        const Value& value,
+                        StoredRecord& result);
+
+    // Zero-copy point lookup - returns pointer to FlatBuffer data
+    // Most efficient when you just need to read the FlatBuffer
+    // Returns nullptr if not found
+    const uint8_t* findRawByIndex(const std::string& tableName,
+                                  const std::string& column,
+                                  const Value& value,
+                                  uint32_t* outLength,
+                                  uint64_t* outSequence = nullptr);
+
+    // Direct iteration over all records - bypasses SQLite completely
+    // Callback receives raw FlatBuffer data for zero-copy access
+    // Returns count of records iterated
+    template<typename Callback>
+    size_t iterateAll(const std::string& tableName, Callback&& callback) const {
+        auto it = tables_.find(tableName);
+        if (it == tables_.end()) {
+            return 0;
+        }
+
+        const std::string& fileId = it->second->getFileId();
+        size_t count = 0;
+        storage_.iterateRefsByFileId(fileId, [&](const StreamingFlatBufferStore::RecordRef& ref) {
+            callback(ref.data, ref.length, ref.sequence);
+            count++;
+            return true;
+        });
+        return count;
+    }
+
+    // Get storage for direct access
+    const StreamingFlatBufferStore& getStorage() const { return storage_; }
+
+    // Set field extractor for a table (required for indexing and queries)
     void setFieldExtractor(const std::string& tableName, TableStore::FieldExtractor extractor);
+
+    // Set fast field extractor for a table (optional, for bypassing Value construction)
+    void setFastFieldExtractor(const std::string& tableName, TableStore::FastFieldExtractor extractor);
+
+    // Set batch extractor for a table (optional, for efficient batch extraction)
+    void setBatchExtractor(const std::string& tableName, TableStore::BatchExtractor extractor);
 
     // Get raw storage data (for export)
     std::vector<uint8_t> exportData() const { return storage_.exportData(); }
@@ -122,18 +212,84 @@ public:
     };
     std::vector<TableStats> getStats() const;
 
+    // ==================== Multi-Source API ====================
+
+    /**
+     * Register a data source with automatic _source column tagging.
+     *
+     * @param sourceName  Unique identifier (becomes virtual table name)
+     * @param store       Pointer to this source's FlatBuffer storage
+     * @param schema      Table schema (columns, types, indexes)
+     * @param fileId      File identifier for routing
+     * @param extractor   Callback to extract field values from FlatBuffers
+     */
+    void registerSource(
+        const std::string& sourceName,
+        StreamingFlatBufferStore* store,
+        const TableDef& schema,
+        const std::string& fileId,
+        TableStore::FieldExtractor extractor
+    );
+
+    /**
+     * Create a unified view combining multiple sources with same schema.
+     *
+     * @param viewName     Name for the unified view
+     * @param sourceNames  List of registered source names to include
+     */
+    void createUnifiedView(
+        const std::string& viewName,
+        const std::vector<std::string>& sourceNames
+    );
+
+    /**
+     * Get list of registered source names.
+     */
+    std::vector<std::string> listSources() const;
+
+    // ==================== Delete Support ====================
+
+    /**
+     * Mark a record as deleted (tombstone).
+     * Record will be skipped in queries until compaction.
+     *
+     * @param tableName  Table name or source name
+     * @param sequence   Sequence number (rowid) to delete
+     */
+    void markDeleted(const std::string& tableName, uint64_t sequence);
+
+    /**
+     * Get count of deleted records for a table.
+     */
+    size_t getDeletedCount(const std::string& tableName) const;
+
+    /**
+     * Clear tombstones after compaction.
+     */
+    void clearTombstones(const std::string& tableName);
+
 private:
     // Callback for streaming ingest - routes to correct table and builds indexes
     void onIngest(std::string_view fileId, const uint8_t* data, size_t length,
                   uint64_t sequence, uint64_t offset);
 
-    QueryResult executeSelect(const ParsedSQL& parsed);
-    bool evaluateCondition(const Value& fieldValue, const WhereCondition& cond);
+    // Initialize SQLite engine with registered tables
+    void initializeSQLiteEngine();
+
+    // Re-register a table with SQLite after extractor is set
+    void updateSQLiteTable(const std::string& tableName);
 
     DatabaseSchema schema_;
     StreamingFlatBufferStore storage_;
     std::map<std::string, std::unique_ptr<TableStore>> tables_;
     std::map<std::string, std::string> fileIdToTable_;  // file_id -> table name
+
+    // SQLite engine for query execution
+    std::unique_ptr<SQLiteEngine> sqliteEngine_;
+    bool sqliteInitialized_ = false;
+
+    // Track which tables have been registered with SQLite
+    std::set<std::string> sqliteRegisteredTables_;
 };
 
 }  // namespace flatsql

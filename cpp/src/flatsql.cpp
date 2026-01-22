@@ -435,6 +435,45 @@ public:
         db_.setFieldExtractor("Post", extractPostFieldGeneric);
     }
 
+    // ==================== Delete Support ====================
+
+    // Mark a record as deleted (tombstone)
+    void markDeleted(const std::string& tableName, double sequence) {
+        db_.markDeleted(tableName, static_cast<uint64_t>(sequence));
+    }
+
+    // Get count of deleted records
+    double getDeletedCount(const std::string& tableName) {
+        return static_cast<double>(db_.getDeletedCount(tableName));
+    }
+
+    // Clear tombstones after compaction
+    void clearTombstones(const std::string& tableName) {
+        db_.clearTombstones(tableName);
+    }
+
+    // ==================== Multi-Source API ====================
+
+    // Get list of registered source names
+    val listSources() {
+        std::vector<std::string> sources = db_.listSources();
+        val result = val::array();
+        for (const auto& s : sources) {
+            result.call<void>("push", val(s));
+        }
+        return result;
+    }
+
+    // Create a unified view combining multiple sources
+    void createUnifiedView(const std::string& viewName, val sourceNames) {
+        std::vector<std::string> names;
+        unsigned len = sourceNames["length"].as<unsigned>();
+        for (unsigned i = 0; i < len; i++) {
+            names.push_back(sourceNames[i].as<std::string>());
+        }
+        db_.createUnifiedView(viewName, names);
+    }
+
 private:
     FlatSQLDatabase db_;
 };
@@ -489,6 +528,13 @@ EMSCRIPTEN_BINDINGS(flatsql) {
         .function("listTables", &JSFlatSQLDatabase::listTables)
         .function("getStats", &JSFlatSQLDatabase::getStats)
         .function("enableDemoExtractors", &JSFlatSQLDatabase::enableDemoExtractors)
+        // Delete support
+        .function("markDeleted", &JSFlatSQLDatabase::markDeleted)
+        .function("getDeletedCount", &JSFlatSQLDatabase::getDeletedCount)
+        .function("clearTombstones", &JSFlatSQLDatabase::clearTombstones)
+        // Multi-source API
+        .function("listSources", &JSFlatSQLDatabase::listSources)
+        .function("createUnifiedView", &JSFlatSQLDatabase::createUnifiedView)
         ;
 
     // Standalone helper functions

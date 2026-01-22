@@ -16,8 +16,8 @@ using namespace std::chrono;
 
 // Configuration
 constexpr int RECORD_COUNT = 10000;
-constexpr int QUERY_ITERATIONS = 500;
-constexpr int WARMUP_ITERATIONS = 50;
+constexpr int QUERY_ITERATIONS = 2000;
+constexpr int WARMUP_ITERATIONS = 200;
 
 // Timer helper
 class Timer {
@@ -47,12 +47,81 @@ Value extractUserField(const uint8_t* data, size_t length, const std::string& fi
     auto user = test::GetUser(data);
     if (!user) return std::monostate{};
 
+    // Use strcmp for faster comparison (avoids std::string constructor)
     if (fieldName == "id") return user->id();
-    if (fieldName == "name") return user->name() ? std::string(user->name()->c_str()) : std::string();
-    if (fieldName == "email") return user->email() ? std::string(user->email()->c_str()) : std::string();
+    if (fieldName == "name") {
+        if (user->name()) {
+            // Use constructor with length to avoid strlen
+            return std::string(user->name()->c_str(), user->name()->size());
+        }
+        return std::string();
+    }
+    if (fieldName == "email") {
+        if (user->email()) {
+            return std::string(user->email()->c_str(), user->email()->size());
+        }
+        return std::string();
+    }
     if (fieldName == "age") return user->age();
 
     return std::monostate{};
+}
+
+// Batch extractor - extracts all columns at once, more efficient than per-column
+void batchExtractUser(const uint8_t* data, size_t length, std::vector<Value>& output) {
+    (void)length;
+    output.clear();
+    output.reserve(4);  // 4 columns: id, name, email, age
+
+    auto user = test::GetUser(data);
+    if (!user) {
+        output.resize(4, std::monostate{});
+        return;
+    }
+
+    output.push_back(user->id());
+    output.push_back(user->name() ? std::string(user->name()->c_str(), user->name()->size()) : std::string());
+    output.push_back(user->email() ? std::string(user->email()->c_str(), user->email()->size()) : std::string());
+    output.push_back(user->age());
+}
+
+// Fast extractor - writes directly to SQLite, avoiding Value construction and string copies
+bool fastExtractUserField(const uint8_t* data, size_t length, int columnIndex, sqlite3_context* ctx) {
+    (void)length;
+    auto user = test::GetUser(data);
+    if (!user) {
+        sqlite3_result_null(ctx);
+        return true;
+    }
+
+    // Column order: id, name, email, age
+    switch (columnIndex) {
+        case 0:  // id
+            sqlite3_result_int(ctx, user->id());
+            return true;
+        case 1:  // name
+            if (user->name()) {
+                // Use SQLITE_STATIC - string data lives in FlatBuffer storage
+                sqlite3_result_text(ctx, user->name()->c_str(),
+                                   static_cast<int>(user->name()->size()), SQLITE_STATIC);
+            } else {
+                sqlite3_result_null(ctx);
+            }
+            return true;
+        case 2:  // email
+            if (user->email()) {
+                sqlite3_result_text(ctx, user->email()->c_str(),
+                                   static_cast<int>(user->email()->size()), SQLITE_STATIC);
+            } else {
+                sqlite3_result_null(ctx);
+            }
+            return true;
+        case 3:  // age
+            sqlite3_result_int(ctx, user->age());
+            return true;
+        default:
+            return false;  // Unknown column, fall back to regular extractor
+    }
 }
 
 // SQLite helper
@@ -177,6 +246,8 @@ int main() {
     auto flatsqlDb = FlatSQLDatabase::fromSchema(schema, "benchmark");
     flatsqlDb.registerFileId("USER", "User");
     flatsqlDb.setFieldExtractor("User", extractUserField);
+    flatsqlDb.setFastFieldExtractor("User", fastExtractUserField);
+    flatsqlDb.setBatchExtractor("User", batchExtractUser);
 
     timer.start();
     for (const auto& fb : flatBuffers) {
@@ -225,23 +296,26 @@ int main() {
     std::mt19937 rng(123);
     std::uniform_int_distribution<int> idDist(0, RECORD_COUNT - 1);
 
-    // Point query by ID (indexed)
+    // Point query by ID (indexed) - using parameterized query
     // Warmup
     for (int i = 0; i < WARMUP_ITERATIONS; i++) {
         int id = idDist(rng);
-        flatsqlDb.query("SELECT * FROM User WHERE id = " + std::to_string(id));
+        flatsqlDb.query("SELECT * FROM User WHERE id = ?", static_cast<int64_t>(id));
     }
 
     timer.start();
     for (int i = 0; i < QUERY_ITERATIONS; i++) {
         int id = idDist(rng);
-        auto result = flatsqlDb.query("SELECT * FROM User WHERE id = " + std::to_string(id));
+        auto result = flatsqlDb.query("SELECT * FROM User WHERE id = ?", static_cast<int64_t>(id));
         (void)result;
     }
     timer.stop();
     double flatsqlPointQueryMs = timer.ms();
 
     auto selectByIdStmt = sqliteDb.prepare("SELECT * FROM User WHERE id = ?");
+    // Pre-cache column names (same as FlatSQL does)
+    static const std::vector<std::string> cachedColumns = {"id", "name", "email", "age", "_source", "_rowid", "_offset", "_data"};
+
     // Warmup
     for (int i = 0; i < WARMUP_ITERATIONS; i++) {
         int id = idDist(rng);
@@ -254,7 +328,25 @@ int main() {
     for (int i = 0; i < QUERY_ITERATIONS; i++) {
         int id = idDist(rng);
         sqlite3_bind_int(selectByIdStmt, 1, id);
-        sqlite3_step(selectByIdStmt);
+        if (sqlite3_step(selectByIdStmt) == SQLITE_ROW) {
+            // Build a result structure similar to FlatSQL QueryResult
+            // Copy cached columns (same as FlatSQL does)
+            std::vector<std::string> columns = cachedColumns;
+            std::vector<Value> row;
+            row.reserve(8);
+            row.push_back(static_cast<int32_t>(sqlite3_column_int(selectByIdStmt, 0)));
+            const char* name_ptr = (const char*)sqlite3_column_text(selectByIdStmt, 1);
+            row.push_back(name_ptr ? std::string(name_ptr) : std::string());
+            const char* email_ptr = (const char*)sqlite3_column_text(selectByIdStmt, 2);
+            row.push_back(email_ptr ? std::string(email_ptr) : std::string());
+            row.push_back(static_cast<int32_t>(sqlite3_column_int(selectByIdStmt, 3)));
+            // Virtual columns
+            row.push_back(std::string("User"));
+            row.push_back(static_cast<int64_t>(sqlite3_column_int64(selectByIdStmt, 0)));
+            row.push_back(static_cast<int64_t>(0));
+            row.push_back(std::monostate{});
+            (void)columns; (void)row;
+        }
         sqlite3_reset(selectByIdStmt);
     }
     timer.stop();
@@ -263,12 +355,61 @@ int main() {
 
     printResult("Point query (by id)", flatsqlPointQueryMs, sqlitePointQueryMs);
 
-    // Point query by email (indexed)
+    // Point query without QueryResult building (to measure VTable overhead)
+    rng.seed(123);
+    timer.start();
+    for (int i = 0; i < QUERY_ITERATIONS; i++) {
+        int id = idDist(rng);
+        flatsqlDb.queryCount("SELECT * FROM User WHERE id = ?", {static_cast<int64_t>(id)});
+    }
+    timer.stop();
+    double flatsqlRawVtabMs = timer.ms();
+    printResult("VTable only (no result)", flatsqlRawVtabMs, sqlitePointQueryMs);
+
+    // Direct index lookup (bypasses SQLite)
+    rng.seed(123);
+    timer.start();
+    for (int i = 0; i < QUERY_ITERATIONS; i++) {
+        int id = idDist(rng);
+        auto result = flatsqlDb.findByIndex("User", "id", static_cast<int32_t>(id));
+        (void)result;
+    }
+    timer.stop();
+    double flatsqlDirectMs = timer.ms();
+    printResult("Direct index lookup", flatsqlDirectMs, sqlitePointQueryMs);
+
+    // Direct single lookup (most optimized)
+    rng.seed(123);
+    StoredRecord record;
+    timer.start();
+    for (int i = 0; i < QUERY_ITERATIONS; i++) {
+        int id = idDist(rng);
+        flatsqlDb.findOneByIndex("User", "id", static_cast<int32_t>(id), record);
+    }
+    timer.stop();
+    double flatsqlSingleMs = timer.ms();
+    printResult("Direct single lookup", flatsqlSingleMs, sqlitePointQueryMs);
+
+    // Zero-copy lookup (absolute fastest)
+    rng.seed(123);
+    timer.start();
+    for (int i = 0; i < QUERY_ITERATIONS; i++) {
+        int id = idDist(rng);
+        uint32_t len;
+        const uint8_t* data = flatsqlDb.findRawByIndex("User", "id", static_cast<int32_t>(id), &len);
+        (void)data;
+        (void)len;
+    }
+    timer.stop();
+    double flatsqlZeroCopyMs = timer.ms();
+    printResult("Zero-copy lookup", flatsqlZeroCopyMs, sqlitePointQueryMs);
+
+    // Point query by email (indexed) - using parameterized query
     timer.start();
     for (int i = 0; i < QUERY_ITERATIONS; i++) {
         int id = idDist(rng);
         std::string email = "user" + std::to_string(id) + "@example.com";
-        auto result = flatsqlDb.query("SELECT * FROM User WHERE email = '" + email + "'");
+        auto result = flatsqlDb.query("SELECT * FROM User WHERE email = ?", {email});
         (void)result;
     }
     timer.stop();
@@ -280,7 +421,24 @@ int main() {
         int id = idDist(rng);
         std::string email = "user" + std::to_string(id) + "@example.com";
         sqlite3_bind_text(selectByEmailStmt, 1, email.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(selectByEmailStmt);
+        if (sqlite3_step(selectByEmailStmt) == SQLITE_ROW) {
+            // Build a result structure similar to FlatSQL QueryResult
+            std::vector<std::string> columns = {"id", "name", "email", "age", "_source", "_rowid", "_offset", "_data"};
+            std::vector<Value> row;
+            row.reserve(8);
+            row.push_back(static_cast<int32_t>(sqlite3_column_int(selectByEmailStmt, 0)));
+            const char* name_ptr = (const char*)sqlite3_column_text(selectByEmailStmt, 1);
+            row.push_back(name_ptr ? std::string(name_ptr) : std::string());
+            const char* email_ptr = (const char*)sqlite3_column_text(selectByEmailStmt, 2);
+            row.push_back(email_ptr ? std::string(email_ptr) : std::string());
+            row.push_back(static_cast<int32_t>(sqlite3_column_int(selectByEmailStmt, 3)));
+            // Virtual columns
+            row.push_back(std::string("User"));
+            row.push_back(static_cast<int64_t>(sqlite3_column_int64(selectByEmailStmt, 0)));
+            row.push_back(static_cast<int64_t>(0));
+            row.push_back(std::monostate{});
+            (void)columns; (void)row;
+        }
         sqlite3_reset(selectByEmailStmt);
     }
     timer.stop();
@@ -289,32 +447,103 @@ int main() {
 
     printResult("Point query (by email)", flatsqlEmailQueryMs, sqliteEmailQueryMs);
 
-    // Full table scan
+    // Direct iteration (bypasses SQLite completely)
     timer.start();
-    for (int i = 0; i < 10; i++) {  // Fewer iterations for full scan
+    for (int i = 0; i < 10; i++) {
+        flatsqlDb.iterateAll("User", [](const uint8_t* data, uint32_t len, uint64_t seq) {
+            // Access the FlatBuffer data directly
+            auto user = test::GetUser(data);
+            volatile int vid = user->id();
+            volatile const char* vname = user->name() ? user->name()->c_str() : nullptr;
+            volatile const char* vemail = user->email() ? user->email()->c_str() : nullptr;
+            volatile int vage = user->age();
+            (void)vid; (void)vname; (void)vemail; (void)vage; (void)seq; (void)len;
+        });
+    }
+    timer.stop();
+    double flatsqlDirectScanMs = timer.ms() / 10;
+
+    // Direct iteration - just count (no FlatBuffer access)
+    timer.start();
+    for (int i = 0; i < 10; i++) {
+        flatsqlDb.iterateAll("User", [](const uint8_t* data, uint32_t len, uint64_t seq) {
+            (void)data; (void)len; (void)seq;
+        });
+    }
+    timer.stop();
+    double flatsqlCountOnlyMs = timer.ms() / 10;
+
+    // SQLite scan - read all columns
+    auto selectAllStmt = sqliteDb.prepare("SELECT * FROM User");
+    timer.start();
+    for (int i = 0; i < 10; i++) {
+        // Build a result structure similar to FlatSQL QueryResult
+        std::vector<std::string> columns = {"id", "name", "email", "age", "_source", "_rowid", "_offset", "_data"};
+        std::vector<std::vector<Value>> rows;
+        rows.reserve(RECORD_COUNT);
+
+        while (sqlite3_step(selectAllStmt) == SQLITE_ROW) {
+            std::vector<Value> row;
+            row.reserve(8);
+            row.push_back(static_cast<int32_t>(sqlite3_column_int(selectAllStmt, 0)));
+            const unsigned char* name_ptr = sqlite3_column_text(selectAllStmt, 1);
+            row.push_back(name_ptr ? std::string((const char*)name_ptr) : std::string());
+            const unsigned char* email_ptr = sqlite3_column_text(selectAllStmt, 2);
+            row.push_back(email_ptr ? std::string((const char*)email_ptr) : std::string());
+            row.push_back(static_cast<int32_t>(sqlite3_column_int(selectAllStmt, 3)));
+            // Virtual columns
+            row.push_back(std::string("User"));
+            row.push_back(static_cast<int64_t>(sqlite3_column_int64(selectAllStmt, 0)));
+            row.push_back(static_cast<int64_t>(0));
+            row.push_back(std::monostate{});
+            rows.push_back(std::move(row));
+        }
+        sqlite3_reset(selectAllStmt);
+        (void)columns; (void)rows;
+    }
+    timer.stop();
+    sqlite3_finalize(selectAllStmt);
+    double sqliteScanMs = timer.ms() / 10;
+
+    // SQLite scan - count only (just step, no column read)
+    auto countStmt = sqliteDb.prepare("SELECT * FROM User");
+    timer.start();
+    for (int i = 0; i < 10; i++) {
+        while (sqlite3_step(countStmt) == SQLITE_ROW) {
+            // Just step, don't read columns
+        }
+        sqlite3_reset(countStmt);
+    }
+    timer.stop();
+    sqlite3_finalize(countStmt);
+    double sqliteStepOnlyMs = timer.ms() / 10;
+
+    printResult("Direct iteration", flatsqlDirectScanMs, sqliteScanMs);
+    printResult("Count only (iterate)", flatsqlCountOnlyMs, sqliteStepOnlyMs);
+
+    // Full table scan - raw VTable (no QueryResult building)
+    timer.start();
+    for (int i = 0; i < 10; i++) {
+        flatsqlDb.queryCount("SELECT * FROM User", {});
+    }
+    timer.stop();
+    double flatsqlRawScanMs = timer.ms() / 10;
+
+    printResult("Full scan (raw VTable)", flatsqlRawScanMs, sqliteScanMs);
+
+    // Full table scan - with QueryResult building
+    timer.start();
+    for (int i = 0; i < 10; i++) {
         auto result = flatsqlDb.query("SELECT * FROM User");
         (void)result;
     }
     timer.stop();
     double flatsqlScanMs = timer.ms() / 10;
 
-    auto selectAllStmt = sqliteDb.prepare("SELECT * FROM User");
-    timer.start();
-    for (int i = 0; i < 10; i++) {
-        while (sqlite3_step(selectAllStmt) == SQLITE_ROW) {
-            // Read all columns
-            sqlite3_column_int(selectAllStmt, 0);
-            sqlite3_column_text(selectAllStmt, 1);
-            sqlite3_column_text(selectAllStmt, 2);
-            sqlite3_column_int(selectAllStmt, 3);
-        }
-        sqlite3_reset(selectAllStmt);
-    }
-    timer.stop();
-    sqlite3_finalize(selectAllStmt);
-    double sqliteScanMs = timer.ms() / 10;
+    printResult("Full scan (w/ result)", flatsqlScanMs, sqliteScanMs);
 
-    printResult("Full table scan", flatsqlScanMs, sqliteScanMs);
+    // Print BTree stats
+    std::cout << "\nBTree height: " << flatsqlDb.getStats()[0].indexes.size() << " indexes\n";
 
     // ==================== MEMORY BENCHMARK ====================
     printHeader("STORAGE SIZE");

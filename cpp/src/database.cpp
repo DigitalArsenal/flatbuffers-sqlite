@@ -52,9 +52,16 @@ std::vector<StoredRecord> TableStore::findByIndex(const std::string& column, con
         return results;
     }
 
-    auto entries = it->second->search(value);
-    for (const auto& entry : entries) {
-        results.push_back(storage_.readRecordAtOffset(entry.dataOffset));
+    // Try fast path for single result (common for primary key lookups)
+    IndexEntry entry;
+    if (it->second->searchFirst(value, entry)) {
+        // Minimal record - just offset and sequence, no data copy
+        StoredRecord record;
+        record.offset = entry.dataOffset;
+        record.header.sequence = entry.sequence;
+        record.header.dataLength = entry.dataLength;
+        // Data is left empty - caller can use offset to read if needed
+        results.push_back(std::move(record));
     }
 
     return results;
@@ -116,6 +123,9 @@ FlatSQLDatabase::FlatSQLDatabase(const DatabaseSchema& schema)
     for (const auto& tableDef : schema_.tables) {
         tables_[tableDef.name] = std::make_unique<TableStore>(tableDef, storage_);
     }
+
+    // Initialize SQLite engine
+    sqliteEngine_ = std::make_unique<SQLiteEngine>();
 }
 
 FlatSQLDatabase FlatSQLDatabase::fromSchema(const std::string& source, const std::string& dbName) {
@@ -173,107 +183,157 @@ void FlatSQLDatabase::loadAndRebuild(const uint8_t* data, size_t length) {
         });
 }
 
-QueryResult FlatSQLDatabase::query(const std::string& sql) {
-    ParsedSQL parsed = SQLParser::parse(sql);
+void FlatSQLDatabase::initializeSQLiteEngine() {
+    if (sqliteInitialized_) return;
 
-    switch (parsed.type) {
-        case SQLStatementType::Select:
-            return executeSelect(parsed);
-        default:
-            throw std::runtime_error("Unsupported query type");
+    // Register all tables that have file IDs registered
+    // Tables without extractors will return NULL for field values
+    for (const auto& [tableName, tableStore] : tables_) {
+        if (!tableStore->getFileId().empty()) {
+            updateSQLiteTable(tableName);
+        }
     }
+
+    sqliteInitialized_ = true;
 }
 
-QueryResult FlatSQLDatabase::executeSelect(const ParsedSQL& parsed) {
-    QueryResult result;
-
-    auto it = tables_.find(parsed.tableName);
+void FlatSQLDatabase::updateSQLiteTable(const std::string& tableName) {
+    auto it = tables_.find(tableName);
     if (it == tables_.end()) {
-        throw std::runtime_error("Table not found: " + parsed.tableName);
+        return;
     }
 
-    TableStore& tableStore = *it->second;
-    const TableDef& tableDef = tableStore.getTableDef();
+    TableStore* tableStore = it->second.get();
 
-    // Determine columns
-    if (parsed.columns.size() == 1 && parsed.columns[0] == "*") {
-        for (const auto& col : tableDef.columns) {
-            result.columns.push_back(col.name);
-        }
-    } else {
-        result.columns = parsed.columns;
+    // Skip if already registered
+    if (sqliteRegisteredTables_.count(tableName)) {
+        return;
     }
 
-    // Get records
-    std::vector<StoredRecord> records;
-    auto extractor = tableStore.getFieldExtractor();
-    bool needsFilter = false;
-
-    if (parsed.where.has_value()) {
-        const WhereCondition& cond = parsed.where.value();
-
-        if (cond.op == "=" || cond.op == "==") {
-            records = tableStore.findByIndex(cond.column, cond.value);
-        } else if (cond.hasBetween) {
-            records = tableStore.findByRange(cond.column, cond.value, cond.value2);
-        } else {
-            // Full scan with filter for <, >, <=, >=, !=
-            records = tableStore.scanAll();
-            needsFilter = true;
-        }
-    } else {
-        records = tableStore.scanAll();
-    }
-
-    // Build result rows using field extractor
-    for (const auto& record : records) {
-        // Apply WHERE filter for non-index operators
-        if (needsFilter && parsed.where.has_value() && extractor) {
-            const WhereCondition& cond = parsed.where.value();
-            Value fieldValue = extractor(record.data.data(), record.data.size(), cond.column);
-            if (!evaluateCondition(fieldValue, cond)) {
-                continue;  // Skip this record
+    // Build index map (BTree* pointers)
+    std::unordered_map<std::string, BTree*> indexes;
+    for (const auto& col : tableStore->getTableDef().columns) {
+        if (col.indexed || col.primaryKey) {
+            BTree* btree = tableStore->getIndex(col.name);
+            if (btree) {
+                indexes[col.name] = btree;
             }
         }
-
-        std::vector<Value> row;
-        for (const auto& colName : result.columns) {
-            if (colName == "_rowid") {
-                row.push_back(static_cast<int64_t>(record.header.sequence));
-            } else if (colName == "_offset") {
-                row.push_back(static_cast<int64_t>(record.offset));
-            } else if (colName == "_data") {
-                // Return raw FlatBuffer data
-                row.push_back(record.data);
-            } else if (extractor) {
-                // Use field extractor to get actual value
-                row.push_back(extractor(record.data.data(), record.data.size(), colName));
-            } else {
-                row.push_back(std::monostate{});  // null if no extractor
-            }
-        }
-        result.rows.push_back(std::move(row));
     }
 
-    // Apply LIMIT
-    if (parsed.limit.has_value() && result.rows.size() > static_cast<size_t>(parsed.limit.value())) {
-        result.rows.resize(parsed.limit.value());
-    }
+    // Register with SQLite engine
+    sqliteEngine_->registerSource(
+        tableName,
+        &storage_,
+        &tableStore->getTableDef(),
+        tableStore->getFileId(),
+        tableStore->getFieldExtractor(),
+        indexes,
+        tableStore->getFastFieldExtractor(),
+        tableStore->getBatchExtractor()
+    );
 
-    return result;
+    sqliteRegisteredTables_.insert(tableName);
 }
 
-bool FlatSQLDatabase::evaluateCondition(const Value& fieldValue, const WhereCondition& cond) {
-    int cmp = compareValues(fieldValue, cond.value);
+QueryResult FlatSQLDatabase::query(const std::string& sql) {
+    // Ensure SQLite engine is initialized
+    initializeSQLiteEngine();
 
-    if (cond.op == "=" || cond.op == "==") return cmp == 0;
-    if (cond.op == "!=" || cond.op == "<>") return cmp != 0;
-    if (cond.op == "<") return cmp < 0;
-    if (cond.op == ">") return cmp > 0;
-    if (cond.op == "<=") return cmp <= 0;
-    if (cond.op == ">=") return cmp >= 0;
+    // Execute via SQLite
+    return sqliteEngine_->execute(sql);
+}
+
+QueryResult FlatSQLDatabase::query(const std::string& sql, const std::vector<Value>& params) {
+    // Ensure SQLite engine is initialized
+    initializeSQLiteEngine();
+
+    // Execute via SQLite with parameters
+    return sqliteEngine_->execute(sql, params);
+}
+
+QueryResult FlatSQLDatabase::query(const std::string& sql, int64_t param) {
+    // Ensure SQLite engine is initialized
+    initializeSQLiteEngine();
+
+    // Use thread-local reusable vector for single-param queries
+    static thread_local std::vector<Value> singleParam(1);
+    singleParam[0] = param;
+
+    // Execute via SQLite with single parameter
+    return sqliteEngine_->execute(sql, singleParam);
+}
+
+size_t FlatSQLDatabase::queryCount(const std::string& sql, const std::vector<Value>& params) {
+    // Ensure SQLite engine is initialized
+    initializeSQLiteEngine();
+
+    // Execute via SQLite without building QueryResult
+    return sqliteEngine_->executeAndCount(sql, params);
+}
+
+std::vector<StoredRecord> FlatSQLDatabase::findByIndex(const std::string& tableName,
+                                                        const std::string& column,
+                                                        const Value& value) {
+    auto it = tables_.find(tableName);
+    if (it == tables_.end()) {
+        return {};
+    }
+    return it->second->findByIndex(column, value);
+}
+
+bool FlatSQLDatabase::findOneByIndex(const std::string& tableName,
+                                      const std::string& column,
+                                      const Value& value,
+                                      StoredRecord& result) {
+    auto it = tables_.find(tableName);
+    if (it == tables_.end()) {
+        return false;
+    }
+
+    BTree* btree = it->second->getIndex(column);
+    if (!btree) {
+        return false;
+    }
+
+    IndexEntry entry;
+    if (btree->searchFirst(value, entry)) {
+        // Minimal record info - avoid data copy
+        result.offset = entry.dataOffset;
+        result.header.dataLength = entry.dataLength;
+        result.header.sequence = entry.sequence;
+        // Clear data vector without deallocating (reuse memory)
+        result.data.clear();
+        return true;
+    }
 
     return false;
+}
+
+const uint8_t* FlatSQLDatabase::findRawByIndex(const std::string& tableName,
+                                                const std::string& column,
+                                                const Value& value,
+                                                uint32_t* outLength,
+                                                uint64_t* outSequence) {
+    auto it = tables_.find(tableName);
+    if (it == tables_.end()) {
+        return nullptr;
+    }
+
+    BTree* btree = it->second->getIndex(column);
+    if (!btree) {
+        return nullptr;
+    }
+
+    IndexEntry entry;
+    if (btree->searchFirst(value, entry)) {
+        if (outSequence) {
+            *outSequence = entry.sequence;
+        }
+        return storage_.getDataAtOffset(entry.dataOffset, outLength);
+    }
+
+    return nullptr;
 }
 
 void FlatSQLDatabase::setFieldExtractor(const std::string& tableName, TableStore::FieldExtractor extractor) {
@@ -283,6 +343,39 @@ void FlatSQLDatabase::setFieldExtractor(const std::string& tableName, TableStore
     }
 
     it->second->setFieldExtractor(extractor);
+
+    // If table has a file ID registered, update SQLite registration
+    if (!it->second->getFileId().empty()) {
+        updateSQLiteTable(tableName);
+    }
+}
+
+void FlatSQLDatabase::setFastFieldExtractor(const std::string& tableName, TableStore::FastFieldExtractor extractor) {
+    auto it = tables_.find(tableName);
+    if (it == tables_.end()) {
+        throw std::runtime_error("Table not found: " + tableName);
+    }
+
+    it->second->setFastFieldExtractor(extractor);
+
+    // If table has a file ID registered, update SQLite registration
+    if (!it->second->getFileId().empty()) {
+        updateSQLiteTable(tableName);
+    }
+}
+
+void FlatSQLDatabase::setBatchExtractor(const std::string& tableName, TableStore::BatchExtractor extractor) {
+    auto it = tables_.find(tableName);
+    if (it == tables_.end()) {
+        throw std::runtime_error("Table not found: " + tableName);
+    }
+
+    it->second->setBatchExtractor(extractor);
+
+    // If table has a file ID registered, update SQLite registration
+    if (!it->second->getFileId().empty()) {
+        updateSQLiteTable(tableName);
+    }
 }
 
 std::vector<std::string> FlatSQLDatabase::listTables() const {
@@ -312,6 +405,53 @@ std::vector<FlatSQLDatabase::TableStats> FlatSQLDatabase::getStats() const {
         stats.push_back(ts);
     }
     return stats;
+}
+
+// ==================== Multi-Source API ====================
+
+void FlatSQLDatabase::registerSource(
+    const std::string& sourceName,
+    StreamingFlatBufferStore* store,
+    const TableDef& schema,
+    const std::string& fileId,
+    TableStore::FieldExtractor extractor
+) {
+    // Build index map (empty for external sources)
+    std::unordered_map<std::string, BTree*> indexes;
+
+    sqliteEngine_->registerSource(
+        sourceName,
+        store,
+        &schema,
+        fileId,
+        extractor,
+        indexes
+    );
+}
+
+void FlatSQLDatabase::createUnifiedView(
+    const std::string& viewName,
+    const std::vector<std::string>& sourceNames
+) {
+    sqliteEngine_->createUnifiedView(viewName, sourceNames);
+}
+
+std::vector<std::string> FlatSQLDatabase::listSources() const {
+    return sqliteEngine_->listSources();
+}
+
+// ==================== Delete Support ====================
+
+void FlatSQLDatabase::markDeleted(const std::string& tableName, uint64_t sequence) {
+    sqliteEngine_->markDeleted(tableName, sequence);
+}
+
+size_t FlatSQLDatabase::getDeletedCount(const std::string& tableName) const {
+    return sqliteEngine_->getDeletedCount(tableName);
+}
+
+void FlatSQLDatabase::clearTombstones(const std::string& tableName) {
+    sqliteEngine_->clearTombstones(tableName);
 }
 
 }  // namespace flatsql

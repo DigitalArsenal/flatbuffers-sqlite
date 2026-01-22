@@ -2,7 +2,7 @@
 #define FLATSQL_BTREE_H
 
 #include "flatsql/types.h"
-#include <functional>
+#include <unordered_map>
 
 namespace flatsql {
 
@@ -19,6 +19,10 @@ public:
 
     // Search for entries with exact key match
     std::vector<IndexEntry> search(const Value& key) const;
+
+    // Search for first entry with exact key match (optimized for unique keys)
+    // Returns true if found, false otherwise
+    bool searchFirst(const Value& key, IndexEntry& result) const;
 
     // Range query: minKey <= key <= maxKey
     std::vector<IndexEntry> range(const Value& minKey, const Value& maxKey) const;
@@ -51,6 +55,8 @@ private:
     void splitChild(uint64_t parentId, int childIndex);
 
     void searchNode(uint64_t nodeId, const Value& key, std::vector<IndexEntry>& results) const;
+    bool searchNodeFirst(uint64_t nodeId, const Value& key, IndexEntry& result) const;
+    bool searchNodeFirstInt(uint64_t nodeId, int64_t keyInt, IndexEntry& result) const;
     void rangeSearch(uint64_t nodeId, const Value& minKey, const Value& maxKey,
                      std::vector<IndexEntry>& results) const;
     void collectAll(uint64_t nodeId, std::vector<IndexEntry>& results) const;
@@ -58,7 +64,7 @@ private:
 
     ValueType keyType_;
     int order_;
-    std::map<uint64_t, BTreeNode> nodes_;
+    std::unordered_map<uint64_t, BTreeNode> nodes_;
     uint64_t rootId_ = 0;
     uint64_t nextNodeId_ = 1;
     uint64_t entryCount_ = 0;

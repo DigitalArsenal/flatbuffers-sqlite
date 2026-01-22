@@ -40,35 +40,33 @@ void testSchemaParser() {
     std::cout << "Schema parser tests passed!" << std::endl;
 }
 
-void testSQLParser() {
-    std::cout << "Testing SQL parser..." << std::endl;
+void testSQLiteEngine() {
+    std::cout << "Testing SQLite engine..." << std::endl;
 
-    // Test SELECT
-    ParsedSQL select = SQLParser::parse("SELECT name, email FROM users WHERE age > 18 LIMIT 10");
-    assert(select.type == SQLStatementType::Select);
-    assert(select.tableName == "users");
-    assert(select.columns.size() == 2);
-    assert(select.columns[0] == "name");
-    assert(select.columns[1] == "email");
-    assert(select.where.has_value());
-    assert(select.where->column == "age");
-    assert(select.where->op == ">");
-    assert(select.limit.has_value());
-    assert(select.limit.value() == 10);
+    // SQL parsing is now handled by SQLite virtual tables
+    // This test verifies the integration works
 
-    // Test BETWEEN
-    ParsedSQL between = SQLParser::parse("SELECT * FROM orders WHERE amount BETWEEN 100 AND 500");
-    assert(between.where.has_value());
-    assert(between.where->hasBetween);
+    std::string schema = R"(
+        table users {
+            id: int (id);
+            name: string;
+            age: int;
+        }
+    )";
 
-    // Test INSERT
-    ParsedSQL insert = SQLParser::parse("INSERT INTO users (name, age) VALUES ('John', 25)");
-    assert(insert.type == SQLStatementType::Insert);
-    assert(insert.tableName == "users");
-    assert(insert.columns.size() == 2);
-    assert(insert.insertValues.size() == 2);
+    FlatSQLDatabase db = FlatSQLDatabase::fromSchema(schema, "sql_test");
+    db.registerFileId("USER", "users");
 
-    std::cout << "SQL parser tests passed!" << std::endl;
+    // Create fake FlatBuffer data with file identifier "USER"
+    std::vector<uint8_t> fakeData = {0x08, 0x00, 0x00, 0x00, 'U', 'S', 'E', 'R', 0x00, 0x00};
+
+    db.ingestOne(fakeData.data(), fakeData.size());
+
+    // Query using SQLite - this tests SELECT parsing
+    QueryResult result = db.query("SELECT * FROM users LIMIT 10");
+    assert(result.rowCount() == 1);
+
+    std::cout << "SQLite engine tests passed!" << std::endl;
 }
 
 void testBTree() {
@@ -388,7 +386,7 @@ int main() {
 
     try {
         testSchemaParser();
-        testSQLParser();
+        testSQLiteEngine();
         testBTree();
         testStorage();
         testDatabase();

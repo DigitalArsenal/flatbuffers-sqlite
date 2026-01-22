@@ -4,7 +4,40 @@
 
 namespace flatsql {
 
-// Compare two Values
+// Helper to convert Value to int64 for comparison (optimized with get_if)
+// Order by frequency: int32_t most common in FlatBuffers, then int64_t
+static bool tryGetInt64(const Value& v, int64_t& out) {
+    // Fast path for common types using get_if (faster than visit)
+    if (auto* p = std::get_if<int32_t>(&v)) { out = *p; return true; }  // Most common
+    if (auto* p = std::get_if<int64_t>(&v)) { out = *p; return true; }
+    if (auto* p = std::get_if<uint32_t>(&v)) { out = *p; return true; }
+    if (auto* p = std::get_if<uint64_t>(&v)) { out = static_cast<int64_t>(*p); return true; }
+    if (auto* p = std::get_if<int16_t>(&v)) { out = *p; return true; }
+    if (auto* p = std::get_if<uint16_t>(&v)) { out = *p; return true; }
+    if (auto* p = std::get_if<int8_t>(&v)) { out = *p; return true; }
+    if (auto* p = std::get_if<uint8_t>(&v)) { out = *p; return true; }
+    return false;
+}
+
+// Helper to convert Value to double for comparison
+static bool tryGetDouble(const Value& v, double& out) {
+    return std::visit([&out](const auto& val) -> bool {
+        using T = std::decay_t<decltype(val)>;
+        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+            out = static_cast<double>(val);
+            return true;
+        } else if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> ||
+                            std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+                            std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t> ||
+                            std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t>) {
+            out = static_cast<double>(val);
+            return true;
+        }
+        return false;
+    }, v);
+}
+
+// Compare two Values with numeric type coercion
 int compareValues(const Value& a, const Value& b) {
     // Handle null comparisons
     if (std::holds_alternative<std::monostate>(a)) {
@@ -14,41 +47,50 @@ int compareValues(const Value& a, const Value& b) {
         return 1;
     }
 
-    // Both non-null - compare by type
-    if (a.index() != b.index()) {
-        // Different types - compare by type index
-        return a.index() < b.index() ? -1 : 1;
+    // Try integer comparison first (handles int32 vs int64 etc.)
+    int64_t aInt, bInt;
+    if (tryGetInt64(a, aInt) && tryGetInt64(b, bInt)) {
+        if (aInt < bInt) return -1;
+        if (aInt > bInt) return 1;
+        return 0;
     }
 
-    // Same type - compare values
-    return std::visit([&b](const auto& aVal) -> int {
-        using T = std::decay_t<decltype(aVal)>;
-        if constexpr (std::is_same_v<T, std::monostate>) {
-            return 0;
-        } else if constexpr (std::is_same_v<T, bool>) {
-            bool bVal = std::get<bool>(b);
-            return aVal == bVal ? 0 : (aVal < bVal ? -1 : 1);
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            const auto& bVal = std::get<std::string>(b);
-            return aVal.compare(bVal);
-        } else if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
-            const auto& bVal = std::get<std::vector<uint8_t>>(b);
-            size_t minLen = std::min(aVal.size(), bVal.size());
-            for (size_t i = 0; i < minLen; i++) {
-                if (aVal[i] < bVal[i]) return -1;
-                if (aVal[i] > bVal[i]) return 1;
-            }
-            if (aVal.size() < bVal.size()) return -1;
-            if (aVal.size() > bVal.size()) return 1;
-            return 0;
-        } else {
-            // Numeric types
-            T bVal = std::get<T>(b);
-            if (aVal < bVal) return -1;
-            if (aVal > bVal) return 1;
-            return 0;
+    // Try floating point comparison
+    double aDouble, bDouble;
+    if (tryGetDouble(a, aDouble) && tryGetDouble(b, bDouble)) {
+        if (aDouble < bDouble) return -1;
+        if (aDouble > bDouble) return 1;
+        return 0;
+    }
+
+    // String comparison
+    if (std::holds_alternative<std::string>(a) && std::holds_alternative<std::string>(b)) {
+        return std::get<std::string>(a).compare(std::get<std::string>(b));
+    }
+
+    // Blob comparison
+    if (std::holds_alternative<std::vector<uint8_t>>(a) && std::holds_alternative<std::vector<uint8_t>>(b)) {
+        const auto& aVec = std::get<std::vector<uint8_t>>(a);
+        const auto& bVec = std::get<std::vector<uint8_t>>(b);
+        size_t minLen = std::min(aVec.size(), bVec.size());
+        for (size_t i = 0; i < minLen; i++) {
+            if (aVec[i] < bVec[i]) return -1;
+            if (aVec[i] > bVec[i]) return 1;
         }
-    }, a);
+        if (aVec.size() < bVec.size()) return -1;
+        if (aVec.size() > bVec.size()) return 1;
+        return 0;
+    }
+
+    // Bool comparison
+    if (std::holds_alternative<bool>(a) && std::holds_alternative<bool>(b)) {
+        bool aVal = std::get<bool>(a);
+        bool bVal = std::get<bool>(b);
+        return aVal == bVal ? 0 : (aVal < bVal ? -1 : 1);
+    }
+
+    // Different incompatible types - compare by type index
+    return a.index() < b.index() ? -1 : 1;
 }
 
 BTree::BTree(ValueType keyType, int order)
@@ -192,6 +234,10 @@ std::vector<IndexEntry> BTree::search(const Value& key) const {
     return results;
 }
 
+bool BTree::searchFirst(const Value& key, IndexEntry& result) const {
+    return searchNodeFirst(rootId_, key, result);
+}
+
 void BTree::searchNode(uint64_t nodeId, const Value& key, std::vector<IndexEntry>& results) const {
     const BTreeNode& node = getNode(nodeId);
 
@@ -214,6 +260,90 @@ void BTree::searchNode(uint64_t nodeId, const Value& key, std::vector<IndexEntry
         }
         searchNode(node.children[childIdx], key, results);
     }
+}
+
+// Fast path for integer key search - avoids repeated variant checks
+bool BTree::searchNodeFirstInt(uint64_t nodeId, int64_t keyInt, IndexEntry& result) const {
+    const BTreeNode& node = getNode(nodeId);
+
+    // Binary search for the key position - assume all entries are integers
+    size_t lo = 0, hi = node.entries.size();
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        // Direct integer extraction - we know entries are int32 for id columns
+        int64_t entryInt;
+        if (auto* p = std::get_if<int32_t>(&node.entries[mid].key)) {
+            entryInt = *p;
+        } else if (auto* p = std::get_if<int64_t>(&node.entries[mid].key)) {
+            entryInt = *p;
+        } else {
+            // Fallback - shouldn't happen for int index
+            tryGetInt64(node.entries[mid].key, entryInt);
+        }
+        if (keyInt <= entryInt) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+
+    // Check for match at found position
+    if (lo < node.entries.size()) {
+        int64_t entryInt;
+        if (auto* p = std::get_if<int32_t>(&node.entries[lo].key)) {
+            entryInt = *p;
+        } else if (auto* p = std::get_if<int64_t>(&node.entries[lo].key)) {
+            entryInt = *p;
+        } else {
+            tryGetInt64(node.entries[lo].key, entryInt);
+        }
+        if (keyInt == entryInt) {
+            result = node.entries[lo];
+            return true;
+        }
+    }
+
+    // If not a leaf, search appropriate child
+    if (!node.isLeaf && lo < node.children.size()) {
+        return searchNodeFirstInt(node.children[lo], keyInt, result);
+    }
+
+    return false;
+}
+
+bool BTree::searchNodeFirst(uint64_t nodeId, const Value& key, IndexEntry& result) const {
+    // Fast path for integer keys
+    int64_t keyInt;
+    if (tryGetInt64(key, keyInt)) {
+        return searchNodeFirstInt(nodeId, keyInt, result);
+    }
+
+    const BTreeNode& node = getNode(nodeId);
+
+    // Binary search for the key position
+    size_t lo = 0, hi = node.entries.size();
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int cmp = compareValues(key, node.entries[mid].key);
+        if (cmp <= 0) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+
+    // Check for match at found position
+    if (lo < node.entries.size() && compareValues(key, node.entries[lo].key) == 0) {
+        result = node.entries[lo];
+        return true;
+    }
+
+    // If not a leaf, search appropriate child
+    if (!node.isLeaf && lo < node.children.size()) {
+        return searchNodeFirst(node.children[lo], key, result);
+    }
+
+    return false;
 }
 
 std::vector<IndexEntry> BTree::range(const Value& minKey, const Value& maxKey) const {
