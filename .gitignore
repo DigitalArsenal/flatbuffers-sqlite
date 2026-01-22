@@ -2,6 +2,7 @@
 node_modules/
 
 # Build outputs
+build-wasm/
 cpp/build/
 cpp/build-wasm/
 cpp/.emsdk/
