@@ -196,7 +196,7 @@ for (size_t i = 0; i < result.rowCount(); i++) {
 ├─────────────────────────────────────────────────────────────┤
 │                    TableStore (per table)                    │
 │  ┌────────────────────────────────────────────────────────┐ │
-│  │  B-Tree Indexes            Field Extractors             │ │
+│  │  SQLite Indexes            Field Extractors             │ │
 │  │  (id, email, timestamp)    (getField callbacks)         │ │
 │  └────────────────────────────────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────────┤
@@ -248,6 +248,77 @@ FlatSQL outperforms traditional SQLite on query operations:
 | Direct iteration | 0.05 ms | 1.25 ms | 25x |
 
 *Benchmarks: 10,000 records, 10,000 query iterations, Apple M3 Ultra*
+
+## Performance Trade-offs
+
+FlatSQL uses SQLite's virtual table (VTable) API to expose FlatBuffer data as queryable tables. This architecture enables SQL queries over raw binary data, but comes with fundamental trade-offs that affect performance characteristics.
+
+### Access Paths
+
+FlatSQL provides three access paths with different performance profiles:
+
+| Access Path | Latency | Throughput | Use Case |
+|-------------|---------|------------|----------|
+| **Zero-Copy API** | 1.7 µs | 580K ops/sec | Direct index lookup, returns raw FlatBuffer pointer |
+| **VTable SQL** | 12.9 µs | 78K ops/sec | Full SQL queries via SQLite |
+| **Pure SQLite** | 2.5 µs | 400K ops/sec | Baseline comparison |
+
+### Why VTable Queries Are Slower Than Pure SQLite
+
+SQLite's VTable API has fundamental limitations that prevent FlatSQL from matching pure SQLite query performance:
+
+1. **Per-Column Extraction** — The `xColumn()` callback is invoked once per column per row. There is no batch API to extract multiple fields at once, meaning each field access has function call overhead.
+
+2. **Mandatory Value Conversion** — All values must be converted to SQLite's internal format via `sqlite3_result_*()` functions. Even though FlatBuffers already store data in an efficient binary format, we must convert strings to SQLite strings, integers to SQLite integers, etc.
+
+3. **Row-by-Row Processing** — The `xNext()` callback advances one row at a time with no vectorized or batch iteration. This prevents SIMD optimizations or processing multiple records per call.
+
+4. **No Direct Memory Access** — SQLite cannot read FlatBuffer memory directly; all data must flow through the VTable callback interface, adding overhead for every field access.
+
+### When to Use Each Access Path
+
+**Use the Zero-Copy API when:**
+- You need maximum throughput for point lookups
+- You're building hot paths that query by indexed keys
+- You can work directly with FlatBuffer data structures
+
+```cpp
+// Zero-copy: returns pointer to raw FlatBuffer (1.7 µs)
+const uint8_t* data = db.findRawByIndex("User", "email", email, &len);
+auto user = GetUser(data);  // Direct FlatBuffer access
+```
+
+**Use VTable SQL when:**
+- You need complex queries (filtering, sorting, aggregation)
+- Query flexibility is more important than raw speed
+- You're doing ad-hoc exploration of the data
+
+```cpp
+// VTable SQL: full query capability (12.9 µs)
+auto result = db.query("SELECT * FROM User WHERE age > 25 ORDER BY name");
+```
+
+### Architecture: SQLite-Backed Indexes
+
+FlatSQL uses SQLite's highly optimized B-tree for indexing (not a custom implementation). This provides:
+
+- **Battle-tested performance** — SQLite's B-tree is used by billions of devices
+- **Consistent behavior** — Same indexing code path as pure SQLite
+- **Fast path optimization** — Type-specific lookups bypass `std::variant` overhead
+
+The index stores `(key, sequence) → (offset, length)` mappings, allowing O(log n) lookups that return pointers directly into the FlatBuffer storage.
+
+### Trade-off Summary
+
+| Aspect | FlatSQL | Pure SQLite |
+|--------|---------|-------------|
+| Point lookup (indexed) | **1.4x faster** (zero-copy API) | Baseline |
+| SQL queries | 5-7x slower (VTable overhead) | Baseline |
+| Storage format | FlatBuffers (portable, zero-copy) | SQLite pages |
+| Data conversion | None (zero-copy) or on-demand | Always required |
+| Streaming ingest | Append-only, real-time indexing | Row-by-row inserts |
+
+**Bottom line:** FlatSQL excels when you need streaming ingestion of FlatBuffer data with SQL query capability. Use the zero-copy API for performance-critical lookups; use SQL for complex queries where flexibility matters more than speed.
 
 ## Building from Source
 

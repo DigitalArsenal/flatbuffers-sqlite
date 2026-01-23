@@ -3,7 +3,7 @@
 
 #include "flatsql/types.h"
 #include "flatsql/storage.h"
-#include "flatsql/btree.h"
+#include "flatsql/sqlite_index.h"
 #include "flatsql/schema_parser.h"
 #include "flatsql/sqlite_engine.h"
 #include <set>
@@ -13,10 +13,11 @@ namespace flatsql {
 /**
  * Table store: manages records and indexes for a single table.
  * Works with streaming ingest - indexes are built as records arrive.
+ * Uses SQLite's optimized B-tree for indexes (via SqliteIndex).
  */
 class TableStore {
 public:
-    TableStore(const TableDef& tableDef, StreamingFlatBufferStore& storage);
+    TableStore(const TableDef& tableDef, StreamingFlatBufferStore& storage, sqlite3* indexDb);
 
     // Called during streaming ingest to index a record
     // This is the streaming index builder - called for each FlatBuffer as it arrives
@@ -71,7 +72,7 @@ public:
     BatchExtractor getBatchExtractor() const { return batchExtractor_; }
 
     // Get index for a column (returns nullptr if not indexed)
-    BTree* getIndex(const std::string& columnName) {
+    SqliteIndex* getIndex(const std::string& columnName) {
         auto it = indexes_.find(columnName);
         return it != indexes_.end() ? it->second.get() : nullptr;
     }
@@ -85,7 +86,8 @@ private:
     TableDef tableDef_;
     std::string fileId_;  // 4-byte file identifier for routing
     StreamingFlatBufferStore& storage_;
-    std::map<std::string, std::unique_ptr<BTree>> indexes_;
+    sqlite3* indexDb_;    // SQLite database for indexes (not owned)
+    std::map<std::string, std::unique_ptr<SqliteIndex>> indexes_;
     uint64_t recordCount_ = 0;
     FieldExtractor fieldExtractor_;
     FastFieldExtractor fastFieldExtractor_;

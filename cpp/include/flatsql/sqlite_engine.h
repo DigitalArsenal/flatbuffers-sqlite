@@ -3,7 +3,7 @@
 
 #include "flatsql/types.h"
 #include "flatsql/storage.h"
-#include "flatsql/btree.h"
+#include "flatsql/sqlite_index.h"
 #include "flatsql/sqlite_vtab.h"
 #include <sqlite3.h>
 #include <memory>
@@ -23,7 +23,7 @@ struct SourceInfo {
     FieldExtractor extractor;
     FastFieldExtractor fastExtractor;
     BatchExtractor batchExtractor = nullptr;      // Optional batch extractor
-    std::unordered_map<std::string, BTree*> indexes;  // Not owned
+    std::unordered_map<std::string, SqliteIndex*> indexes;  // Not owned
     std::unordered_set<uint64_t> tombstones;      // Owned - deleted sequences
     VTabCreateInfo vtabInfo;                      // Info passed to xCreate
     // Source-specific record infos pointer (for multi-source routing)
@@ -71,7 +71,7 @@ public:
         const TableDef* tableDef,
         const std::string& fileId,
         FieldExtractor extractor,
-        const std::unordered_map<std::string, BTree*>& indexes = {},
+        const std::unordered_map<std::string, SqliteIndex*>& indexes = {},
         FastFieldExtractor fastExtractor = nullptr,
         BatchExtractor batchExtractor = nullptr,
         const std::vector<StreamingFlatBufferStore::FileRecordInfo>* sourceRecordInfos = nullptr

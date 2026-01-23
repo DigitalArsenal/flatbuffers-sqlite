@@ -1,5 +1,7 @@
 #include "flatsql/database.h"
 #include "flatsql/junction.h"
+#include "flatsql/sqlite_index.h"
+#include <sqlite3.h>
 #include <iostream>
 #include <cassert>
 
@@ -69,32 +71,205 @@ void testSQLiteEngine() {
     std::cout << "SQLite engine tests passed!" << std::endl;
 }
 
-void testBTree() {
-    std::cout << "Testing B-tree..." << std::endl;
+void testSqliteIndex() {
+    std::cout << "Testing SQLite-backed index..." << std::endl;
 
-    BTree tree(ValueType::Int32, 4);  // Small order for testing
+    // Create an in-memory SQLite database
+    sqlite3* db;
+    int rc = sqlite3_open(":memory:", &db);
+    assert(rc == SQLITE_OK);
 
-    // Insert some values
-    for (int i = 0; i < 100; i++) {
-        tree.insert(i, static_cast<uint64_t>(i * 100), 50, static_cast<uint64_t>(i));
+    // ==================== Integer Index Tests ====================
+    std::cout << "  Testing integer index..." << std::endl;
+    {
+        SqliteIndex index(db, "test_table", "int_column", ValueType::Int32);
+
+        // Insert some values
+        for (int i = 0; i < 100; i++) {
+            index.insert(i, static_cast<uint64_t>(i * 100), 50, static_cast<uint64_t>(i));
+        }
+
+        assert(index.getEntryCount() == 100);
+
+        // Search for specific value
+        auto results = index.search(42);
+        assert(results.size() == 1);
+        assert(results[0].dataOffset == 4200);
+
+        // searchFirst (Value API)
+        IndexEntry entry;
+        bool found = index.searchFirst(50, entry);
+        assert(found);
+        assert(entry.dataOffset == 5000);
+
+        // searchFirstInt64 (fast path API)
+        uint64_t offset, seq;
+        uint32_t len;
+        found = index.searchFirstInt64(50, offset, len, seq);
+        assert(found);
+        assert(offset == 5000);
+        assert(len == 50);
+        assert(seq == 50);
+
+        // Test not found case
+        found = index.searchFirstInt64(999, offset, len, seq);
+        assert(!found);
+
+        // Range search
+        auto rangeResults = index.range(10, 20);
+        assert(rangeResults.size() == 11);  // 10 through 20 inclusive
+
+        // Get all
+        auto all = index.all();
+        assert(all.size() == 100);
+
+        // Test clear
+        index.clear();
+        assert(index.getEntryCount() == 0);
     }
 
-    assert(tree.getEntryCount() == 100);
+    // ==================== String Index Tests ====================
+    std::cout << "  Testing string index..." << std::endl;
+    {
+        SqliteIndex stringIndex(db, "test_table", "string_column", ValueType::String);
 
-    // Search for specific value
-    auto results = tree.search(42);
-    assert(results.size() == 1);
-    assert(results[0].dataOffset == 4200);
+        // Insert string keys (like NORAD CAT IDs)
+        std::vector<std::string> keys = {"00001", "00002", "00003", "12345", "99999"};
+        for (size_t i = 0; i < keys.size(); i++) {
+            stringIndex.insert(keys[i], i * 1000, 100, i + 1);
+        }
 
-    // Range search
-    auto rangeResults = tree.range(10, 20);
-    assert(rangeResults.size() == 11);  // 10 through 20 inclusive
+        assert(stringIndex.getEntryCount() == 5);
 
-    // Get all
-    auto all = tree.all();
-    assert(all.size() == 100);
+        // searchFirst (Value API)
+        IndexEntry entry;
+        bool found = stringIndex.searchFirst(std::string("12345"), entry);
+        assert(found);
+        assert(entry.dataOffset == 3000);  // index 3
 
-    std::cout << "B-tree tests passed!" << std::endl;
+        // searchFirstString (fast path API)
+        uint64_t offset, seq;
+        uint32_t len;
+        found = stringIndex.searchFirstString("12345", offset, len, seq);
+        assert(found);
+        assert(offset == 3000);
+        assert(len == 100);
+        assert(seq == 4);
+
+        // Test not found case
+        found = stringIndex.searchFirstString("NOTFOUND", offset, len, seq);
+        assert(!found);
+
+        // Range search on strings
+        auto rangeResults = stringIndex.range(std::string("00001"), std::string("00003"));
+        assert(rangeResults.size() == 3);
+
+        stringIndex.clear();
+    }
+
+    // ==================== Non-Unique Index Tests ====================
+    std::cout << "  Testing non-unique index (multiple entries per key)..." << std::endl;
+    {
+        SqliteIndex nonUniqueIndex(db, "posts", "user_id", ValueType::Int32);
+
+        // Simulate multiple posts per user (user_id -> post offset)
+        // User 1 has 3 posts
+        nonUniqueIndex.insert(1, 100, 50, 1);
+        nonUniqueIndex.insert(1, 200, 50, 2);
+        nonUniqueIndex.insert(1, 300, 50, 3);
+        // User 2 has 2 posts
+        nonUniqueIndex.insert(2, 400, 50, 4);
+        nonUniqueIndex.insert(2, 500, 50, 5);
+        // User 3 has 1 post
+        nonUniqueIndex.insert(3, 600, 50, 6);
+
+        assert(nonUniqueIndex.getEntryCount() == 6);
+
+        // search() should return ALL matching entries
+        auto user1Posts = nonUniqueIndex.search(1);
+        assert(user1Posts.size() == 3);
+
+        auto user2Posts = nonUniqueIndex.search(2);
+        assert(user2Posts.size() == 2);
+
+        auto user3Posts = nonUniqueIndex.search(3);
+        assert(user3Posts.size() == 1);
+
+        // searchFirst should return just one
+        IndexEntry entry;
+        bool found = nonUniqueIndex.searchFirst(1, entry);
+        assert(found);
+        // Should be one of the user 1 posts
+        assert(entry.dataOffset == 100 || entry.dataOffset == 200 || entry.dataOffset == 300);
+
+        // User with no posts
+        auto noPosts = nonUniqueIndex.search(999);
+        assert(noPosts.empty());
+
+        nonUniqueIndex.clear();
+    }
+
+    // ==================== Edge Case Tests ====================
+    std::cout << "  Testing edge cases..." << std::endl;
+    {
+        SqliteIndex edgeIndex(db, "edge_test", "value", ValueType::Int64);
+
+        // Test with boundary values
+        edgeIndex.insert(static_cast<int64_t>(0), 0, 10, 1);
+        edgeIndex.insert(static_cast<int64_t>(-1), 10, 10, 2);
+        edgeIndex.insert(static_cast<int64_t>(INT64_MAX), 20, 10, 3);
+        edgeIndex.insert(static_cast<int64_t>(INT64_MIN), 30, 10, 4);
+
+        assert(edgeIndex.getEntryCount() == 4);
+
+        // Verify lookups work for boundary values
+        uint64_t offset, seq;
+        uint32_t len;
+
+        bool found = edgeIndex.searchFirstInt64(INT64_MAX, offset, len, seq);
+        assert(found);
+        assert(offset == 20);
+
+        found = edgeIndex.searchFirstInt64(INT64_MIN, offset, len, seq);
+        assert(found);
+        assert(offset == 30);
+
+        found = edgeIndex.searchFirstInt64(0, offset, len, seq);
+        assert(found);
+        assert(offset == 0);
+
+        edgeIndex.clear();
+    }
+
+    // ==================== Empty Index Tests ====================
+    std::cout << "  Testing empty index behavior..." << std::endl;
+    {
+        SqliteIndex emptyIndex(db, "empty_test", "col", ValueType::Int32);
+
+        assert(emptyIndex.getEntryCount() == 0);
+
+        auto results = emptyIndex.search(42);
+        assert(results.empty());
+
+        IndexEntry entry;
+        bool found = emptyIndex.searchFirst(42, entry);
+        assert(!found);
+
+        uint64_t offset, seq;
+        uint32_t len;
+        found = emptyIndex.searchFirstInt64(42, offset, len, seq);
+        assert(!found);
+
+        auto all = emptyIndex.all();
+        assert(all.empty());
+
+        auto range = emptyIndex.range(0, 100);
+        assert(range.empty());
+    }
+
+    sqlite3_close(db);
+
+    std::cout << "SQLite-backed index tests passed!" << std::endl;
 }
 
 void testStorage() {
@@ -387,7 +562,7 @@ int main() {
     try {
         testSchemaParser();
         testSQLiteEngine();
-        testBTree();
+        testSqliteIndex();
         testStorage();
         testDatabase();
         testSchemaAnalyzer();

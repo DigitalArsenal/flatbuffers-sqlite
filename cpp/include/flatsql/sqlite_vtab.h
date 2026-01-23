@@ -3,7 +3,7 @@
 
 #include "flatsql/types.h"
 #include "flatsql/storage.h"
-#include "flatsql/btree.h"
+#include "flatsql/sqlite_index.h"
 #include <sqlite3.h>
 #include <functional>
 #include <unordered_set>
@@ -38,7 +38,7 @@ enum class ScanType {
 // Index info for optimization
 struct VTabIndexInfo {
     std::string columnName;
-    BTree* btree;
+    SqliteIndex* index;
 };
 
 /**
@@ -52,7 +52,7 @@ struct FlatBufferVTab : public sqlite3_vtab {
     std::string fileId;                     // File identifier for routing
     FieldExtractor extractor;               // Extracts values from FlatBuffers
     FastFieldExtractor fastExtractor;       // Optional fast path that writes directly to SQLite
-    std::unordered_map<std::string, BTree*> indexes;  // Column name -> B-tree index (not owned)
+    std::unordered_map<std::string, SqliteIndex*> indexes;  // Column name -> SQLite index (not owned)
     std::unordered_set<uint64_t>* tombstones; // Deleted sequences (not owned, may be nullptr)
 
     // Column index for virtual _source column (-1 if not enabled)
@@ -182,7 +182,7 @@ struct VTabCreateInfo {
     std::string fileId;
     FieldExtractor extractor;
     FastFieldExtractor fastExtractor;
-    std::unordered_map<std::string, BTree*> indexes;
+    std::unordered_map<std::string, SqliteIndex*> indexes;
     std::unordered_set<uint64_t>* tombstones;
     // Source-specific record infos (for multi-source routing)
     // When set, uses these instead of store->getRecordInfoVector(fileId)

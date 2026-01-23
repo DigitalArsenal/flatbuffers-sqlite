@@ -6,13 +6,14 @@ namespace flatsql {
 
 // ==================== TableStore ====================
 
-TableStore::TableStore(const TableDef& tableDef, StreamingFlatBufferStore& storage)
-    : tableDef_(tableDef), storage_(storage) {
+TableStore::TableStore(const TableDef& tableDef, StreamingFlatBufferStore& storage, sqlite3* indexDb)
+    : tableDef_(tableDef), storage_(storage), indexDb_(indexDb) {
 
-    // Create indexes for indexed columns
+    // Create indexes for indexed columns using SQLite's optimized B-tree
     for (const auto& col : tableDef_.columns) {
         if (col.indexed || col.primaryKey) {
-            indexes_[col.name] = std::make_unique<BTree>(col.type);
+            indexes_[col.name] = std::make_unique<SqliteIndex>(
+                indexDb_, tableDef_.name, col.name, col.type);
         }
     }
 }
@@ -31,9 +32,9 @@ void TableStore::onIngest(const uint8_t* data, size_t length, uint64_t sequence,
     }
 
     // Extract and index each indexed column
-    for (auto& [colName, btree] : indexes_) {
+    for (auto& [colName, index] : indexes_) {
         Value key = fieldExtractor_(data, length, colName);
-        btree->insert(key, offset, static_cast<uint32_t>(length), sequence);
+        index->insert(key, offset, static_cast<uint32_t>(length), sequence);
     }
 }
 
@@ -122,13 +123,14 @@ std::vector<std::string> TableStore::getIndexNames() const {
 FlatSQLDatabase::FlatSQLDatabase(const DatabaseSchema& schema)
     : schema_(schema) {
 
-    // Initialize table stores
-    for (const auto& tableDef : schema_.tables) {
-        tables_[tableDef.name] = std::make_unique<TableStore>(tableDef, storage_);
-    }
-
-    // Initialize SQLite engine
+    // Initialize SQLite engine first (we need its db handle for indexes)
     sqliteEngine_ = std::make_unique<SQLiteEngine>();
+
+    // Initialize table stores with SQLite db handle for indexes
+    for (const auto& tableDef : schema_.tables) {
+        tables_[tableDef.name] = std::make_unique<TableStore>(
+            tableDef, storage_, sqliteEngine_->getDb());
+    }
 }
 
 FlatSQLDatabase FlatSQLDatabase::fromSchema(const std::string& source, const std::string& dbName) {
@@ -213,13 +215,13 @@ void FlatSQLDatabase::updateSQLiteTable(const std::string& tableName) {
         return;
     }
 
-    // Build index map (BTree* pointers)
-    std::unordered_map<std::string, BTree*> indexes;
+    // Build index map (SqliteIndex* pointers)
+    std::unordered_map<std::string, SqliteIndex*> indexes;
     for (const auto& col : tableStore->getTableDef().columns) {
         if (col.indexed || col.primaryKey) {
-            BTree* btree = tableStore->getIndex(col.name);
-            if (btree) {
-                indexes[col.name] = btree;
+            SqliteIndex* index = tableStore->getIndex(col.name);
+            if (index) {
+                indexes[col.name] = index;
             }
         }
     }
@@ -296,13 +298,13 @@ bool FlatSQLDatabase::findOneByIndex(const std::string& tableName,
         return false;
     }
 
-    BTree* btree = it->second->getIndex(column);
-    if (!btree) {
+    SqliteIndex* index = it->second->getIndex(column);
+    if (!index) {
         return false;
     }
 
     IndexEntry entry;
-    if (btree->searchFirst(value, entry)) {
+    if (index->searchFirst(value, entry)) {
         // Minimal record info - avoid data copy
         result.offset = entry.dataOffset;
         result.header.dataLength = entry.dataLength;
@@ -325,13 +327,40 @@ const uint8_t* FlatSQLDatabase::findRawByIndex(const std::string& tableName,
         return nullptr;
     }
 
-    BTree* btree = it->second->getIndex(column);
-    if (!btree) {
+    SqliteIndex* index = it->second->getIndex(column);
+    if (!index) {
         return nullptr;
     }
 
+    // Fast path for string keys - avoid Value construction overhead
+    if (auto* strKey = std::get_if<std::string>(&value)) {
+        uint64_t offset, seq;
+        uint32_t len;
+        if (index->searchFirstString(*strKey, offset, len, seq)) {
+            if (outSequence) {
+                *outSequence = seq;
+            }
+            return storage_.getDataAtOffset(offset, outLength);
+        }
+        return nullptr;
+    }
+
+    // Fast path for int64 keys
+    if (auto* intKey = std::get_if<int64_t>(&value)) {
+        uint64_t offset, seq;
+        uint32_t len;
+        if (index->searchFirstInt64(*intKey, offset, len, seq)) {
+            if (outSequence) {
+                *outSequence = seq;
+            }
+            return storage_.getDataAtOffset(offset, outLength);
+        }
+        return nullptr;
+    }
+
+    // Fallback for other types
     IndexEntry entry;
-    if (btree->searchFirst(value, entry)) {
+    if (index->searchFirst(value, entry)) {
         if (outSequence) {
             *outSequence = entry.sequence;
         }
@@ -442,8 +471,9 @@ void FlatSQLDatabase::createSourceTable(const std::string& baseTableName, const 
     // Get base table def
     const TableDef& baseDef = baseIt->second->getTableDef();
 
-    // Create source table with same schema
-    tables_[sourceTableName] = std::make_unique<TableStore>(baseDef, storage_);
+    // Create source table with same schema (share the same sqlite db for indexes)
+    tables_[sourceTableName] = std::make_unique<TableStore>(
+        baseDef, storage_, sqliteEngine_->getDb());
 
     // Copy file ID registration for source-specific routing
     std::string fileId = baseIt->second->getFileId();
@@ -542,7 +572,7 @@ void FlatSQLDatabase::registerExternalSource(
     TableStore::FieldExtractor extractor
 ) {
     // Build index map (empty for external sources)
-    std::unordered_map<std::string, BTree*> indexes;
+    std::unordered_map<std::string, SqliteIndex*> indexes;
 
     sqliteEngine_->registerSource(
         sourceName,

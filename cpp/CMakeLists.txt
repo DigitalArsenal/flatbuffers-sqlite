@@ -25,7 +25,7 @@ endif()
 # Source files (library - no main)
 set(FLATSQL_LIB_SOURCES
     src/storage.cpp
-    src/btree.cpp
+    src/sqlite_index.cpp
     src/schema_parser.cpp
     src/database.cpp
     src/junction.cpp
@@ -41,7 +41,7 @@ set(FLATSQL_WASM_SOURCES
 
 set(FLATSQL_HEADERS
     include/flatsql/storage.h
-    include/flatsql/btree.h
+    include/flatsql/sqlite_index.h
     include/flatsql/schema_parser.h
     include/flatsql/database.h
     include/flatsql/junction.h

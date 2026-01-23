@@ -106,7 +106,7 @@ void SQLiteEngine::registerSource(
     const TableDef* tableDef,
     const std::string& fileId,
     FieldExtractor extractor,
-    const std::unordered_map<std::string, BTree*>& indexes,
+    const std::unordered_map<std::string, SqliteIndex*>& indexes,
     FastFieldExtractor fastExtractor,
     BatchExtractor batchExtractor,
     const std::vector<StreamingFlatBufferStore::FileRecordInfo>* sourceRecordInfos
@@ -794,12 +794,12 @@ bool SQLiteEngine::tryFastPath(const std::string& sql, const std::vector<Value>&
 
     fastPathHits++;
 
-    BTree* btree = indexIt->second;
+    SqliteIndex* index = indexIt->second;
     const Value& searchValue = params[0];
 
     // Do the lookup first - avoid work if no match
     IndexEntry entry;
-    if (!btree->searchFirst(searchValue, entry)) {
+    if (!index->searchFirst(searchValue, entry)) {
         // No match found - return empty result with cached column names (avoid copy with move)
         result.columns = getCachedColumnNames(source);
         return true;
@@ -913,7 +913,7 @@ bool SQLiteEngine::tryFastPathMinimal(const std::string& sql, const std::vector<
         return false;  // No index, fall back to VTable
     }
 
-    BTree* btree = indexIt->second;
+    SqliteIndex* index = indexIt->second;
     const Value& searchValue = params[0];
 
     // Check tombstones set
@@ -921,7 +921,7 @@ bool SQLiteEngine::tryFastPathMinimal(const std::string& sql, const std::vector<
 
     // Do the lookup
     IndexEntry entry;
-    if (!btree->searchFirst(searchValue, entry)) {
+    if (!index->searchFirst(searchValue, entry)) {
         return false;  // No match
     }
 
