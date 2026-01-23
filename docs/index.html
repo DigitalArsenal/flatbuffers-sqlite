@@ -535,15 +535,20 @@
         }
 
         .source-btn {
-            padding: 4px 12px;
+            padding: 8px 16px;
+            min-height: 36px;
             background: transparent;
             border: 1px solid rgba(255, 255, 255, 0.15);
-            border-radius: 14px;
+            border-radius: 18px;
             color: var(--text-muted);
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.2s;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .source-btn:hover {
@@ -572,15 +577,20 @@
         }
 
         .query-example-btn {
-            padding: 8px 16px;
+            padding: 10px 18px;
+            min-height: 44px;
             background: rgba(96, 165, 250, 0.1);
             border: 1px solid rgba(96, 165, 250, 0.25);
-            border-radius: 20px;
+            border-radius: 22px;
             color: #60a5fa;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .query-example-btn:hover {
@@ -606,8 +616,10 @@
         }
 
         .demo-btn {
-            padding: 10px 18px;
-            font-size: 13px;
+            padding: 12px 20px;
+            min-height: 44px;
+            min-width: 44px;
+            font-size: 14px;
             font-weight: 600;
             background: var(--ui-bg);
             backdrop-filter: blur(7px);
@@ -616,6 +628,10 @@
             border-radius: 28px;
             cursor: pointer;
             transition: all 0.2s;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         .demo-btn:hover:not(:disabled) {
@@ -1989,12 +2005,15 @@
             <div class="demo-body">
                 <div class="demo-panel">
                     <h4>Streaming Ingest</h4>
+                    <!-- Source selector disabled until WASM is rebuilt with multi-source support -->
+                    <!--
                     <div class="source-selector">
                         <span style="color: var(--text-muted); font-size: 12px; margin-right: 8px;">Source:</span>
                         <button class="source-btn active" data-source="local">Local</button>
                         <button class="source-btn" data-source="cloud">Cloud</button>
                         <button class="source-btn" data-source="peer">Peer</button>
                     </div>
+                    -->
                     <div class="demo-controls">
                         <button class="demo-btn" id="btnStream1k" disabled>Stream 1,000</button>
                         <button class="demo-btn" id="btnStream10k" disabled>Stream 10,000</button>
@@ -2246,7 +2265,7 @@ flatsql --schema app.fbs --load data.bin \\
         let totalRecords = 0;
         let totalBytes = 0;
         let useWorker = true;
-        let currentSource = 'local';
+        let currentSource = null;  // Set to null until multi-source WASM is ready
 
         // Pagination state
         let currentResults = null;
@@ -2617,31 +2636,50 @@ flatsql --schema app.fbs --load data.bin \\
 
             setButtonsEnabled(true);
 
-            document.getElementById('btnStream1k').onclick = () => streamUsers(1000);
-            document.getElementById('btnStream10k').onclick = () => streamUsers(10000);
-            document.getElementById('btnClear').onclick = clearAll;
-            document.getElementById('btnQuery').onclick = runQuery;
-            document.getElementById('btnPrevPage').onclick = prevPage;
-            document.getElementById('btnNextPage').onclick = nextPage;
-            document.getElementById('queryInput').onkeypress = (e) => {
-                if (e.key === 'Enter') runQuery();
+            // Use addEventListener for better mobile support
+            // Track touch to prevent double-firing on mobile
+            const addTapHandler = (el, handler) => {
+                let lastTouchTime = 0;
+                el.addEventListener('touchend', (e) => {
+                    if (!el.disabled) {
+                        lastTouchTime = Date.now();
+                        e.preventDefault();
+                        handler(e);
+                    }
+                }, { passive: false });
+                el.addEventListener('click', (e) => {
+                    // Ignore click if it came right after a touch (within 500ms)
+                    if (!el.disabled && Date.now() - lastTouchTime > 500) {
+                        handler(e);
+                    }
+                });
             };
 
-            // Source selector buttons
-            document.querySelectorAll('.source-btn').forEach(btn => {
-                btn.onclick = () => {
-                    document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    currentSource = btn.dataset.source;
-                };
+            addTapHandler(document.getElementById('btnStream1k'), () => streamUsers(1000));
+            addTapHandler(document.getElementById('btnStream10k'), () => streamUsers(10000));
+            addTapHandler(document.getElementById('btnClear'), clearAll);
+            addTapHandler(document.getElementById('btnQuery'), runQuery);
+            addTapHandler(document.getElementById('btnPrevPage'), prevPage);
+            addTapHandler(document.getElementById('btnNextPage'), nextPage);
+            document.getElementById('queryInput').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') runQuery();
             });
+
+            // Source selector buttons (disabled until WASM rebuilt with multi-source)
+            // document.querySelectorAll('.source-btn').forEach(btn => {
+            //     addTapHandler(btn, () => {
+            //         document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
+            //         btn.classList.add('active');
+            //         currentSource = btn.dataset.source;
+            //     });
+            // });
 
             // Query example buttons
             document.querySelectorAll('.query-example-btn').forEach(btn => {
-                btn.onclick = () => {
+                addTapHandler(btn, () => {
                     document.getElementById('queryInput').value = btn.dataset.query;
                     runQuery();
-                };
+                });
             });
         }
 
