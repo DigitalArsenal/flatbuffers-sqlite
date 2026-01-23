@@ -566,23 +566,15 @@
         .source-dropdown {
             padding: 10px 16px;
             min-height: 44px;
-            background: var(--ui-bg);
+            background-color: var(--ui-bg);
             border: 1px solid rgba(255, 255, 255, 0.15);
             border-radius: 12px;
             color: var(--text-primary);
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
-            -webkit-appearance: none;
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23999' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 12px center;
-            padding-right: 36px;
+            transition: border-color 0.2s;
             min-width: 160px;
-            position: relative;
-            z-index: 10;
         }
 
         .source-dropdown:hover:not(:disabled) {
@@ -602,7 +594,6 @@
         .source-dropdown option {
             background: #1a1a1a;
             color: var(--text-primary);
-            padding: 8px;
         }
 
         .query-examples {
@@ -2047,7 +2038,7 @@
             </div>
             <div class="demo-body">
                 <div class="demo-panel">
-                    <h4>Multi-Source Streaming</h4>
+                    <h4>Streaming Ingest</h4>
                     <div class="source-selector">
                         <label for="sourceSelect" style="color: var(--text-muted); font-size: 13px;">Source:</label>
                         <select id="sourceSelect" class="source-dropdown" disabled>
@@ -2083,10 +2074,10 @@
                     <h4>SQL Query</h4>
                     <div class="query-examples">
                         <span class="query-examples-label">Try:</span>
-                        <button class="query-example-btn" data-query="SELECT _source, id, name, email, age FROM User LIMIT 50">All Sources</button>
-                        <button class="query-example-btn" data-query="SELECT _source, COUNT(*) as count FROM User GROUP BY _source">By Source</button>
-                        <button class="query-example-btn" data-query="SELECT id, name, email FROM &quot;User@satellite-1&quot; LIMIT 20">Satellite 1</button>
-                        <button class="query-example-btn" data-query="SELECT _source, id, name FROM User WHERE age > 40 LIMIT 30">Age > 40</button>
+                        <button class="query-example-btn" data-query="SELECT id, name, email, age FROM User LIMIT 50">All Users</button>
+                        <button class="query-example-btn" data-query="SELECT id, name, email FROM User WHERE email LIKE '%gmail%' LIMIT 50">Gmail</button>
+                        <button class="query-example-btn" data-query="SELECT id, name, email FROM User WHERE age > 40 LIMIT 50">Age > 40</button>
+                        <button class="query-example-btn" data-query="SELECT COUNT(*) as total FROM User">Count</button>
                     </div>
                     <input type="text" class="query-input" id="queryInput" placeholder="SELECT * FROM User WHERE email LIKE '%gmail%' LIMIT 50" value="SELECT id, name, email, age FROM User">
                     <div class="demo-controls">
