@@ -144,26 +144,29 @@ export class BTree {
     }
     rangeSearch(nodeId, minKey, maxKey, results) {
         const node = this.getNode(nodeId);
-        for (let i = 0; i < node.entries.length; i++) {
+        // Find first entry that might be in range
+        let i = 0;
+        while (i < node.entries.length) {
             const entry = node.entries[i];
             const cmpMin = compareKeys(entry.key, minKey, this.config.keyType);
             const cmpMax = compareKeys(entry.key, maxKey, this.config.keyType);
-            // Visit left child if entry key >= minKey
-            if (!node.isLeaf && i === 0 && cmpMin >= 0) {
-                this.rangeSearch(node.children[0], minKey, maxKey, results);
+            // Visit left child if it might contain entries in range
+            if (!node.isLeaf && cmpMin >= 0) {
+                this.rangeSearch(node.children[i], minKey, maxKey, results);
             }
             // Add entry if in range
             if (cmpMin >= 0 && cmpMax <= 0) {
                 results.push(entry);
             }
-            // Visit right child
-            if (!node.isLeaf && cmpMin >= 0) {
-                this.rangeSearch(node.children[i + 1], minKey, maxKey, results);
-            }
             // Stop if we're past maxKey
             if (cmpMax > 0) {
                 break;
             }
+            i++;
+        }
+        // Visit the rightmost child if we haven't stopped early
+        if (!node.isLeaf && i === node.entries.length && node.children.length > i) {
+            this.rangeSearch(node.children[i], minKey, maxKey, results);
         }
     }
     // Get all entries (full scan)

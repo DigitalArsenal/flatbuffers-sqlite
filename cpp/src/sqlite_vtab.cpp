@@ -407,9 +407,13 @@ int FlatBufferVTabModule::xFilter(sqlite3_vtab_cursor* pCursor, int idxNum, cons
             // Convert SQLite value to our Value type
             Value searchValue = valueFromSqlite(argv[argIdx]);
 
-            // Try searchFirst for fast single-result path (no allocation)
-            if (indexIt->second->searchFirst(searchValue, cursor->singleResult)) {
-                // Fast path: no tombstones (common case)
+            // Check if this is a primary key column (unique index)
+            bool isPrimaryKey = vtab->tableDef->columns[colIdx].primaryKey;
+
+            // For primary key (unique) columns, use fast single-result path
+            // For non-unique indexed columns, must use search() to get all matches
+            if (isPrimaryKey && indexIt->second->searchFirst(searchValue, cursor->singleResult)) {
+                // Fast path for primary key: single result expected
                 if (!vtab->tombstones || !vtab->tombstones->count(cursor->singleResult.sequence)) {
                     cursor->scanType = ScanType::IndexSingleLookup;
                     cursor->singleResultReturned = false;
@@ -425,11 +429,16 @@ int FlatBufferVTabModule::xFilter(sqlite3_vtab_cursor* pCursor, int idxNum, cons
                         cursor->atEof = true;
                     }
                 } else {
-                    // Tombstoned - fall back to search for other matches
-                    cursor->scanType = ScanType::IndexEquality;
-                    cursor->indexResults = indexIt->second->search(searchValue);
+                    // Tombstoned primary key - no match
+                    cursor->atEof = true;
+                }
+            } else {
+                // Non-unique index OR primary key with tombstone: search for all matches
+                cursor->scanType = ScanType::IndexEquality;
+                cursor->indexResults = indexIt->second->search(searchValue);
 
-                    // Filter out all tombstoned entries
+                // Filter out tombstoned entries if needed
+                if (vtab->tombstones && !vtab->tombstones->empty()) {
                     std::vector<IndexEntry> filtered;
                     for (const auto& entry : cursor->indexResults) {
                         if (!vtab->tombstones->count(entry.sequence)) {
@@ -437,27 +446,24 @@ int FlatBufferVTabModule::xFilter(sqlite3_vtab_cursor* pCursor, int idxNum, cons
                         }
                     }
                     cursor->indexResults = std::move(filtered);
+                }
 
-                    cursor->indexPosition = 0;
-                    if (cursor->indexResults.empty()) {
-                        cursor->atEof = true;
+                cursor->indexPosition = 0;
+                if (cursor->indexResults.empty()) {
+                    cursor->atEof = true;
+                } else {
+                    const IndexEntry& entry = cursor->indexResults[0];
+                    uint32_t len = 0;
+                    const uint8_t* data = vtab->store->getDataAtOffset(entry.dataOffset, &len);
+                    if (data) {
+                        cursor->currentOffset = entry.dataOffset;
+                        cursor->currentSequence = entry.sequence;
+                        cursor->currentData = data;
+                        cursor->currentLength = len;
                     } else {
-                        const IndexEntry& entry = cursor->indexResults[0];
-                        uint32_t len = 0;
-                        const uint8_t* data = vtab->store->getDataAtOffset(entry.dataOffset, &len);
-                        if (data) {
-                            cursor->currentOffset = entry.dataOffset;
-                            cursor->currentSequence = entry.sequence;
-                            cursor->currentData = data;
-                            cursor->currentLength = len;
-                        } else {
-                            cursor->atEof = true;
-                        }
+                        cursor->atEof = true;
                     }
                 }
-            } else {
-                // No match found
-                cursor->atEof = true;
             }
             break;
         }

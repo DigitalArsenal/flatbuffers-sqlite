@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="FlatSQL - Streaming SQL engine over raw FlatBuffer storage. Zero-copy queries, file identifier routing, real-time indexing.">
-    <title>FlatSQL - Streaming FlatBuffer SQL Engine</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+    <meta name="description" content="Digital Arsenal FlatSQL - SQL queries over raw FlatBuffer storage. Zero-copy queries, file identifier routing, real-time indexing.">
+    <title>Digital Arsenal FlatSQL</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ffd000'/><stop offset='100%25' stop-color='%23ff8800'/></linearGradient></defs><ellipse cx='50' cy='25' rx='35' ry='12' fill='url(%23g)'/><path d='M15 25v50c0 6.6 15.7 12 35 12s35-5.4 35-12V25' fill='none' stroke='url(%23g)' stroke-width='6'/><ellipse cx='50' cy='75' rx='35' ry='12' fill='none' stroke='url(%23g)' stroke-width='6'/><path d='M55 35L40 55h15L42 80l25-30H52l8-15z' fill='%23000'/></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -14,20 +14,20 @@
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
-            --bg-dark: #0a0a0f;
-            --bg-card: rgba(20, 20, 30, 0.8);
+            --bg-dark: #0a0a0a;
+            --bg-card: rgba(15, 15, 15, 0.9);
             --glass-bg: rgba(255, 255, 255, 0.03);
             --glass-border: rgba(255, 255, 255, 0.08);
             --glass-hover: rgba(255, 255, 255, 0.06);
 
-            --text-primary: #f0f0f5;
-            --text-secondary: rgba(240, 240, 245, 0.6);
-            --text-muted: rgba(240, 240, 245, 0.4);
+            --text-primary: #f0f0f0;
+            --text-secondary: rgba(240, 240, 240, 0.6);
+            --text-muted: rgba(240, 240, 240, 0.4);
 
-            --accent-cyan: #00d4ff;
-            --accent-purple: #a855f7;
-            --accent-green: #10b981;
-            --accent-orange: #f59e0b;
+            --accent-cyan: #ffd000;
+            --accent-purple: #ffaa00;
+            --accent-green: #88cc00;
+            --accent-orange: #ff8800;
 
             --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
@@ -71,9 +71,9 @@
             height: 100%;
             z-index: -1;
             background:
-                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0, 212, 255, 0.15), transparent),
-                radial-gradient(ellipse 60% 40% at 80% 50%, rgba(168, 85, 247, 0.1), transparent),
-                radial-gradient(ellipse 50% 30% at 20% 80%, rgba(16, 185, 129, 0.08), transparent);
+                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(255, 208, 0, 0.12), transparent),
+                radial-gradient(ellipse 60% 40% at 80% 50%, rgba(255, 170, 0, 0.08), transparent),
+                radial-gradient(ellipse 50% 30% at 20% 80%, rgba(255, 136, 0, 0.06), transparent);
         }
 
         /* Navigation */
@@ -181,10 +181,10 @@
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            justify-content: center;
+            justify-content: flex-start;
             align-items: center;
             text-align: center;
-            padding: 120px 24px 80px;
+            padding: 180px 24px 80px;
         }
 
         .hero-badge {
@@ -385,8 +385,8 @@
         .demo-btn {
             padding: 8px 16px;
             font-size: 13px;
-            background: rgba(0, 212, 255, 0.1);
-            border: 1px solid rgba(0, 212, 255, 0.3);
+            background: rgba(255, 208, 0, 0.1);
+            border: 1px solid rgba(255, 208, 0, 0.3);
             color: var(--accent-cyan);
             border-radius: 6px;
             cursor: pointer;
@@ -394,12 +394,36 @@
         }
 
         .demo-btn:hover {
-            background: rgba(0, 212, 255, 0.2);
+            background: rgba(255, 208, 0, 0.2);
         }
 
         .demo-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+
+        .spinner {
+            display: none;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 208, 0, 0.3);
+            border-top-color: var(--accent-cyan);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-left: 8px;
+        }
+
+        .spinner.active {
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .demo-btn.loading {
+            pointer-events: none;
+            opacity: 0.7;
         }
 
         .stats-row {
@@ -610,11 +634,7 @@
     </nav>
 
     <section class="hero">
-        <div class="hero-badge">
-            <span>🚀</span>
-            <span>Streaming Architecture</span>
-        </div>
-        <h1>Stream. Index. Query.</h1>
+        <h1>Digital Arsenal<br>FlatSQL</h1>
         <p>SQL queries over raw FlatBuffer storage. Zero conversion, real-time indexing, pure streaming.</p>
         <div class="hero-buttons">
             <a href="#demo" class="btn btn-primary">Try Live Demo</a>
@@ -681,8 +701,8 @@
                 <div class="demo-panel">
                     <h4>Streaming Ingest</h4>
                     <div class="demo-controls">
-                        <button class="demo-btn" id="btnStream10" disabled>Stream 10 Users</button>
-                        <button class="demo-btn" id="btnStream100" disabled>Stream 100</button>
+                        <button class="demo-btn" id="btnStream1k" disabled>Stream 1,000</button>
+                        <button class="demo-btn" id="btnStream10k" disabled>Stream 10,000</button>
                         <button class="demo-btn" id="btnStreamMixed" disabled>Mixed Stream</button>
                         <button class="demo-btn" id="btnClear" disabled>Clear</button>
                     </div>
@@ -724,7 +744,7 @@
                     <h4>SQL Query</h4>
                     <input type="text" class="query-input" id="queryInput" placeholder="SELECT _offset, _data, * FROM User" value="SELECT _offset, _data, id, name, email, age FROM User">
                     <div class="demo-controls">
-                        <button class="demo-btn" id="btnQuery" disabled>Run Query</button>
+                        <button class="demo-btn" id="btnQuery" disabled>Run Query<span class="spinner" id="querySpinner"></span></button>
                     </div>
                     <h4>Results</h4>
                     <div style="overflow-x: auto; max-height: 400px;">
@@ -899,57 +919,29 @@ nc -U /tmp/flatsql.sock < stream.fb`
     </script>
 
     <script type="module">
-        // Demo functionality
-        import FlatSQLModule from './flatsql.js';
-
-        let flatsql = null;
-        let db = null;
+        // Demo functionality using Web Worker for responsive UI
+        let worker = null;
+        let messageId = 0;
+        let pendingCallbacks = new Map();
         let totalRecords = 0;
         let totalBytes = 0;
 
-        const schema = `
-            table User {
-                id: int (id);
-                name: string;
-                email: string (key);
-                age: int;
-            }
-            table Post {
-                id: int (id);
-                user_id: int (key);
-                title: string;
-            }
-        `;
-
-        function toVec(arr) {
-            const vec = new flatsql.VectorUint8();
-            for (const byte of arr) vec.push_back(byte);
-            return vec;
+        // Send message to worker and return promise
+        function sendToWorker(action, params = {}) {
+            return new Promise((resolve, reject) => {
+                const id = messageId++;
+                pendingCallbacks.set(id, { resolve, reject });
+                worker.postMessage({ id, action, params });
+            });
         }
 
-        // Convert Uint8Array to hex string (first N bytes)
+        // Convert array to hex string (first N bytes)
         function toHexPreview(arr, maxBytes = 32) {
-            const hex = Array.from(arr.slice(0, maxBytes))
+            const bytes = Array.isArray(arr) ? arr : Array.from(arr);
+            const hex = bytes.slice(0, maxBytes)
                 .map(b => b.toString(16).padStart(2, '0'))
                 .join(' ');
-            return arr.length > maxBytes ? hex + '...' : hex;
-        }
-
-        function buildStream(buffers) {
-            const parts = [];
-            for (const buf of buffers) {
-                const size = new Uint8Array(4);
-                new DataView(size.buffer).setUint32(0, buf.length, true);
-                parts.push(size, buf);
-            }
-            const total = parts.reduce((s, p) => s + p.length, 0);
-            const result = new Uint8Array(total);
-            let offset = 0;
-            for (const p of parts) {
-                result.set(p, offset);
-                offset += p.length;
-            }
-            return result;
+            return bytes.length > maxBytes ? hex + '...' : hex;
         }
 
         function log(type, data, values = {}) {
@@ -958,8 +950,7 @@ nc -U /tmp/flatsql.sock < stream.fb`
             const item = document.createElement('div');
             item.className = 'stream-item';
 
-            // Show hex preview and values
-            const hexPreview = data instanceof Uint8Array ? toHexPreview(data, 24) : '';
+            const hexPreview = Array.isArray(data) ? toHexPreview(data, 24) : '';
             const valuesStr = Object.entries(values).map(([k,v]) => `${k}=${v}`).join(', ');
 
             item.innerHTML = `
@@ -976,127 +967,94 @@ nc -U /tmp/flatsql.sock < stream.fb`
             document.getElementById('statBytes').textContent = totalBytes;
         }
 
+        function setButtonsEnabled(enabled) {
+            document.getElementById('btnStream1k').disabled = !enabled;
+            document.getElementById('btnStream10k').disabled = !enabled;
+            document.getElementById('btnStreamMixed').disabled = !enabled;
+            document.getElementById('btnClear').disabled = !enabled;
+            document.getElementById('btnQuery').disabled = !enabled;
+        }
+
         async function streamUsers(count) {
+            setButtonsEnabled(false);
             const start = performance.now();
-            const buffers = [];
-            const userData = [];
 
-            for (let i = 0; i < count; i++) {
-                const id = totalRecords + i + 1;
-                const name = `User${id}`;
-                const email = `user${id}@test.com`;
-                const age = 20 + (id % 50);
+            try {
+                const result = await sendToWorker('streamUsers', { count, startId: totalRecords });
 
-                // Use proper FlatBuffer creation from WASM
-                const fb = flatsql.createTestUser(id, name, email, age);
-                buffers.push(fb);
-                userData.push({ id, name, email, age, fb });
+                totalRecords += result.count;
+                totalBytes += result.bytes;
+
+                const elapsed = performance.now() - start;
+                document.getElementById('statRate').textContent = Math.round(count / elapsed * 1000);
+
+                // Log sample records
+                for (const u of result.samples) {
+                    log('User', u.fb, { id: u.id, name: u.name, age: u.age });
+                }
+                if (count > 5) {
+                    const lastItem = document.createElement('div');
+                    lastItem.className = 'stream-item';
+                    lastItem.innerHTML = `<span style="color: var(--text-muted)">... +${count - 5} more records</span>`;
+                    document.getElementById('streamLog').insertBefore(lastItem, document.getElementById('streamLog').firstChild);
+                }
+
+                updateStats();
+            } catch (e) {
+                console.error('Stream error:', e);
+            } finally {
+                setButtonsEnabled(true);
             }
-
-            const stream = buildStream(buffers);
-            const vec = toVec(stream);
-            db.ingest(vec);
-            vec.delete();
-
-            totalRecords += count;
-            totalBytes += stream.length;
-
-            const elapsed = performance.now() - start;
-            document.getElementById('statRate').textContent = Math.round(count / elapsed * 1000);
-
-            // Log stored records with hex data
-            for (let i = 0; i < Math.min(count, 5); i++) {
-                const u = userData[i];
-                log('User', u.fb, { id: u.id, name: u.name, age: u.age });
-            }
-            if (count > 5) {
-                const lastItem = document.createElement('div');
-                lastItem.className = 'stream-item';
-                lastItem.innerHTML = `<span style="color: var(--text-muted)">... +${count - 5} more records</span>`;
-                document.getElementById('streamLog').insertBefore(lastItem, document.getElementById('streamLog').firstChild);
-            }
-
-            updateStats();
         }
 
         async function streamMixed() {
+            setButtonsEnabled(false);
             const start = performance.now();
-            const buffers = [];
-            const logData = [];
 
-            // Interleave users and posts
-            for (let i = 0; i < 10; i++) {
-                const userId = totalRecords + i + 1;
-                const name = `User${userId}`;
-                const email = `user${userId}@test.com`;
-                const age = 25 + i;
+            try {
+                const result = await sendToWorker('streamMixed', { startId: totalRecords });
 
-                const userFb = flatsql.createTestUser(userId, name, email, age);
-                buffers.push(userFb);
-                logData.push({ type: 'User', fb: userFb, values: { id: userId, name, age } });
+                totalRecords += result.count;
+                totalBytes += result.bytes;
 
-                for (let j = 0; j < 2; j++) {
-                    const postId = i * 2 + j + 1;
-                    const title = `Post ${postId}`;
+                const elapsed = performance.now() - start;
+                document.getElementById('statRate').textContent = Math.round(result.count / elapsed * 1000);
 
-                    const postFb = flatsql.createTestPost(postId, userId, title);
-                    buffers.push(postFb);
-                    logData.push({ type: 'Post', fb: postFb, values: { id: postId, user_id: userId, title } });
+                // Log sample records
+                for (const d of result.samples) {
+                    log(d.type, d.fb, { id: d.id, ...(d.userId ? { user_id: d.userId } : {}) });
                 }
+                if (result.count > 8) {
+                    const lastItem = document.createElement('div');
+                    lastItem.className = 'stream-item';
+                    lastItem.innerHTML = `<span style="color: var(--text-muted)">... +${result.count - 8} more records</span>`;
+                    document.getElementById('streamLog').insertBefore(lastItem, document.getElementById('streamLog').firstChild);
+                }
+
+                updateStats();
+            } catch (e) {
+                console.error('Stream error:', e);
+            } finally {
+                setButtonsEnabled(true);
             }
-
-            const stream = buildStream(buffers);
-            const vec = toVec(stream);
-            db.ingest(vec);
-            vec.delete();
-
-            totalRecords += 30;
-            totalBytes += stream.length;
-
-            const elapsed = performance.now() - start;
-            document.getElementById('statRate').textContent = Math.round(30 / elapsed * 1000);
-
-            // Log first few records with hex
-            for (let i = 0; i < Math.min(logData.length, 6); i++) {
-                const d = logData[i];
-                log(d.type, d.fb, d.values);
-            }
-            if (logData.length > 6) {
-                const lastItem = document.createElement('div');
-                lastItem.className = 'stream-item';
-                lastItem.innerHTML = `<span style="color: var(--text-muted)">... +${logData.length - 6} more records</span>`;
-                document.getElementById('streamLog').insertBefore(lastItem, document.getElementById('streamLog').firstChild);
-            }
-
-            updateStats();
         }
 
         function formatCell(col, cell) {
             if (cell === null || cell === undefined) return '<span style="color: var(--text-muted)">NULL</span>';
 
-            // Format _offset column as hex address
             if (col === '_offset') {
                 return `<span style="color: var(--accent-purple)">0x${Number(cell).toString(16).padStart(4, '0')}</span>`;
             }
 
-            // Format _data column as hex bytes
             if (col === '_data') {
-                // cell might be a typed array view
-                let bytes;
-                if (cell instanceof Uint8Array || ArrayBuffer.isView(cell)) {
-                    bytes = Array.from(cell);
-                } else if (Array.isArray(cell)) {
-                    bytes = cell;
-                } else {
-                    return '<span style="color: var(--text-muted)">[binary]</span>';
-                }
+                let bytes = Array.isArray(cell) ? cell : (cell instanceof Uint8Array ? Array.from(cell) : null);
+                if (!bytes) return '<span style="color: var(--text-muted)">[binary]</span>';
 
                 const hex = bytes.slice(0, 24).map(b => b.toString(16).padStart(2, '0')).join(' ');
                 const suffix = bytes.length > 24 ? `... (${bytes.length} bytes)` : `(${bytes.length} bytes)`;
                 return `<code style="font-size: 10px; color: var(--accent-orange); word-break: break-all;">${hex} ${suffix}</code>`;
             }
 
-            // Format _rowid
             if (col === '_rowid') {
                 return `<span style="color: var(--accent-cyan)">#${cell}</span>`;
             }
@@ -1104,16 +1062,22 @@ nc -U /tmp/flatsql.sock < stream.fb`
             return String(cell);
         }
 
-        function runQuery() {
+        async function runQuery() {
             const sql = document.getElementById('queryInput').value;
+            const btn = document.getElementById('btnQuery');
+            const spinner = document.getElementById('querySpinner');
+
+            btn.classList.add('loading');
+            spinner.classList.add('active');
+            setButtonsEnabled(false);
+
             try {
-                const result = db.query(sql);
-                const cols = result.getColumns();
-                const rows = result.getRows();
+                const result = await sendToWorker('query', { sql });
+                const cols = result.columns;
+                const rows = result.rows;
 
                 let html = '<thead><tr>';
                 for (const col of cols) {
-                    // Style special columns differently
                     const style = col.startsWith('_') ? 'color: var(--accent-green); font-style: italic;' : '';
                     html += `<th style="${style}">${col}</th>`;
                 }
@@ -1129,50 +1093,72 @@ nc -U /tmp/flatsql.sock < stream.fb`
                 html += '</tbody>';
 
                 document.getElementById('resultsTable').innerHTML = html;
-                result.delete();
             } catch (e) {
                 document.getElementById('resultsTable').innerHTML =
-                    `<thead><tr><th style="color: #ef4444">Error: ${e.message}</th></tr></thead>`;
+                    `<thead><tr><th style="color: #ef4444">Error: ${e}</th></tr></thead>`;
                 console.error(e);
+            } finally {
+                btn.classList.remove('loading');
+                spinner.classList.remove('active');
+                setButtonsEnabled(true);
             }
         }
 
-        function clearAll() {
-            if (db) db.delete();
-            db = new flatsql.FlatSQLDatabase(schema, 'demo');
-            db.registerFileId('USER', 'User');
-            db.registerFileId('POST', 'Post');
-            db.enableDemoExtractors();  // Enable field extraction for queries
-            totalRecords = 0;
-            totalBytes = 0;
-            document.getElementById('streamLog').innerHTML =
-                '<div style="color: var(--text-muted); text-align: center; padding: 40px;">Cleared</div>';
-            document.getElementById('resultsTable').innerHTML =
-                '<thead><tr><th colspan="4">Run a query to see results</th></tr></thead>';
-            updateStats();
-            document.getElementById('statRate').textContent = '-';
+        async function clearAll() {
+            setButtonsEnabled(false);
+            try {
+                await sendToWorker('clear');
+                totalRecords = 0;
+                totalBytes = 0;
+                document.getElementById('streamLog').innerHTML =
+                    '<div style="color: var(--text-muted); text-align: center; padding: 40px;">Cleared</div>';
+                document.getElementById('resultsTable').innerHTML =
+                    '<thead><tr><th colspan="4">Run a query to see results</th></tr></thead>';
+                updateStats();
+                document.getElementById('statRate').textContent = '-';
+            } catch (e) {
+                console.error('Clear error:', e);
+            } finally {
+                setButtonsEnabled(true);
+            }
         }
 
-        // Initialize
+        // Initialize worker
         async function init() {
             try {
-                flatsql = await FlatSQLModule();
-                db = new flatsql.FlatSQLDatabase(schema, 'demo');
-                db.registerFileId('USER', 'User');
-                db.registerFileId('POST', 'Post');
-                db.enableDemoExtractors();  // Enable field extraction for queries
+                // Create worker
+                worker = new Worker(new URL('./flatsql-worker.js', import.meta.url), { type: 'module' });
+
+                // Handle worker messages
+                worker.onmessage = (e) => {
+                    const { id, success, result, error } = e.data;
+                    const callback = pendingCallbacks.get(id);
+                    if (callback) {
+                        pendingCallbacks.delete(id);
+                        if (success) {
+                            callback.resolve(result);
+                        } else {
+                            callback.reject(error);
+                        }
+                    }
+                };
+
+                worker.onerror = (e) => {
+                    console.error('Worker error:', e);
+                    document.getElementById('demoStatus').innerHTML =
+                        `<span style="color: #ef4444">Worker error</span>`;
+                };
+
+                // Initialize the worker
+                await sendToWorker('init');
 
                 document.getElementById('demoStatus').innerHTML =
-                    '<span class="status-dot"></span><span>Ready</span>';
+                    '<span class="status-dot"></span><span>Ready (Worker)</span>';
 
-                document.getElementById('btnStream10').disabled = false;
-                document.getElementById('btnStream100').disabled = false;
-                document.getElementById('btnStreamMixed').disabled = false;
-                document.getElementById('btnClear').disabled = false;
-                document.getElementById('btnQuery').disabled = false;
+                setButtonsEnabled(true);
 
-                document.getElementById('btnStream10').onclick = () => streamUsers(10);
-                document.getElementById('btnStream100').onclick = () => streamUsers(100);
+                document.getElementById('btnStream1k').onclick = () => streamUsers(1000);
+                document.getElementById('btnStream10k').onclick = () => streamUsers(10000);
                 document.getElementById('btnStreamMixed').onclick = streamMixed;
                 document.getElementById('btnClear').onclick = clearAll;
                 document.getElementById('btnQuery').onclick = runQuery;
@@ -1182,7 +1168,7 @@ nc -U /tmp/flatsql.sock < stream.fb`
 
             } catch (e) {
                 document.getElementById('demoStatus').innerHTML =
-                    `<span style="color: #ef4444">Error loading WASM</span>`;
+                    `<span style="color: #ef4444">Error: ${e}</span>`;
                 console.error(e);
             }
         }

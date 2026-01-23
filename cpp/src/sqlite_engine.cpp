@@ -802,16 +802,13 @@ bool SQLiteEngine::tryFastPath(const std::string& sql, const std::vector<Value>&
         return false;  // Error, fall back to VTable
     }
 
-    // Get cached column names - reference to avoid copy
-    const auto& cachedCols = getCachedColumnNames(source);
+    // Get cached column names (copy is necessary, but columns are cached)
+    result.columns = getCachedColumnNames(source);
 
-    // Build result - reserve rows first to avoid reallocation
-    result.columns = cachedCols;
-    result.rows.reserve(1);
-
-    // Build row using batch extractor if available
-    std::vector<Value> row;
-    row.reserve(cachedCols.size());  // Reserve for all columns including virtual
+    // Use thread-local row buffer to avoid allocation
+    static thread_local std::vector<Value> row;
+    row.clear();
+    row.reserve(result.columns.size());
 
     if (source->batchExtractor) {
         source->batchExtractor(data, dataLen, row);
@@ -824,13 +821,13 @@ bool SQLiteEngine::tryFastPath(const std::string& sql, const std::vector<Value>&
         row.resize(source->tableDef->columns.size(), std::monostate{});
     }
 
-    // Virtual columns - skip _data copy for performance
-    row.push_back(source->name);  // _source
-    row.push_back(static_cast<int64_t>(entry.sequence));  // _rowid
-    row.push_back(static_cast<int64_t>(entry.dataOffset));  // _offset
-    row.push_back(std::monostate{});  // _data - null for performance
+    // Virtual columns - use string_view-like approach where possible
+    row.emplace_back(source->name);  // _source (move if possible)
+    row.emplace_back(static_cast<int64_t>(entry.sequence));  // _rowid
+    row.emplace_back(static_cast<int64_t>(entry.dataOffset));  // _offset
+    row.emplace_back(std::monostate{});  // _data - null for performance
 
-    result.rows.push_back(std::move(row));
+    result.rows.emplace_back(std::move(row));
     return true;
 }
 

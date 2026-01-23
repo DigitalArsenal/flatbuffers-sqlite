@@ -196,8 +196,19 @@ else()
     # Optimize for benchmark
     target_compile_options(flatsql_benchmark PRIVATE -O3)
 
+    # Comprehensive round-trip test (using vendored SQLite)
+    add_executable(flatsql_roundtrip_test test/roundtrip_test.cpp)
+    target_link_libraries(flatsql_roundtrip_test PRIVATE flatsql_lib)
+    target_include_directories(flatsql_roundtrip_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/schemas
+        ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
+    )
+
     enable_testing()
     add_test(NAME FlatSQLTest COMMAND flatsql_test)
     add_test(NAME FlatSQLIntegrationTest COMMAND flatsql_integration_test)
     add_test(NAME FlatSQLSocketTest COMMAND flatsql_socket_test)
+    add_test(NAME FlatSQLRoundTripTest COMMAND flatsql_roundtrip_test)
 endif()
