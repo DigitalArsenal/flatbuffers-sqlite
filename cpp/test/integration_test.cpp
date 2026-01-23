@@ -274,6 +274,105 @@ void testIndexedQuery() {
     std::cout << "Indexed query test passed!" << std::endl;
 }
 
+void testMultiSource() {
+    std::cout << "Testing multi-source routing..." << std::endl;
+
+    std::string schema = R"(
+        table User {
+            id: int (id);
+            name: string;
+            email: string (key);
+            age: int;
+        }
+    )";
+
+    auto db = FlatSQLDatabase::fromSchema(schema, "multisource_test");
+
+    // First set up file IDs and extractors on base tables
+    db.registerFileId("USER", "User");
+    db.setFieldExtractor("User", extractUserField);
+
+    // Now register sources (they will copy file ID and extractor from base)
+    std::cout << "  Registering sources..." << std::endl;
+    db.registerSource("satellite-1");
+    db.registerSource("satellite-2");
+    db.registerSource("ground-station");
+
+    // List sources
+    auto sources = db.listSources();
+    std::cout << "  Registered " << sources.size() << " sources:";
+    for (const auto& s : sources) {
+        std::cout << " " << s;
+    }
+    std::cout << std::endl;
+    assert(sources.size() == 3);
+
+    // Create unified views
+    std::cout << "  Creating unified views..." << std::endl;
+    db.createUnifiedViews();
+
+    // Ingest data to each source
+    std::cout << "  Ingesting data to satellite-1..." << std::endl;
+    for (int i = 0; i < 3; i++) {
+        std::string name = "Sat1User" + std::to_string(i);
+        std::string email = "sat1_" + std::to_string(i) + "@space.com";
+        auto userData = createUserFlatBuffer(i, name.c_str(), email.c_str(), 25 + i);
+        db.ingestOneWithSource(userData.data(), userData.size(), "satellite-1");
+    }
+
+    std::cout << "  Ingesting data to satellite-2..." << std::endl;
+    for (int i = 0; i < 2; i++) {
+        std::string name = "Sat2User" + std::to_string(i);
+        std::string email = "sat2_" + std::to_string(i) + "@space.com";
+        auto userData = createUserFlatBuffer(100 + i, name.c_str(), email.c_str(), 30 + i);
+        db.ingestOneWithSource(userData.data(), userData.size(), "satellite-2");
+    }
+
+    std::cout << "  Ingesting data to ground-station..." << std::endl;
+    for (int i = 0; i < 4; i++) {
+        std::string name = "GroundUser" + std::to_string(i);
+        std::string email = "ground_" + std::to_string(i) + "@earth.com";
+        auto userData = createUserFlatBuffer(200 + i, name.c_str(), email.c_str(), 40 + i);
+        db.ingestOneWithSource(userData.data(), userData.size(), "ground-station");
+    }
+
+    // Query source-specific table
+    std::cout << "  Querying User@satellite-1..." << std::endl;
+    auto result = db.query("SELECT id, name FROM \"User@satellite-1\"");
+    std::cout << "    Found " << result.rowCount() << " rows" << std::endl;
+    assert(result.rowCount() == 3);
+
+    std::cout << "  Querying User@satellite-2..." << std::endl;
+    result = db.query("SELECT id, name FROM \"User@satellite-2\"");
+    std::cout << "    Found " << result.rowCount() << " rows" << std::endl;
+    assert(result.rowCount() == 2);
+
+    std::cout << "  Querying User@ground-station..." << std::endl;
+    result = db.query("SELECT id, name FROM \"User@ground-station\"");
+    std::cout << "    Found " << result.rowCount() << " rows" << std::endl;
+    assert(result.rowCount() == 4);
+
+    // Query unified view (combines all sources)
+    std::cout << "  Querying unified User view..." << std::endl;
+    result = db.query("SELECT _source, id, name FROM User");
+    std::cout << "    Found " << result.rowCount() << " total rows across all sources" << std::endl;
+    assert(result.rowCount() == 9);  // 3 + 2 + 4
+
+    // Print results
+    std::cout << "    Results:" << std::endl;
+    for (size_t i = 0; i < result.rowCount() && i < 5; i++) {
+        std::string source = std::get<std::string>(result.rows[i][0]);
+        int64_t id = std::get<int64_t>(result.rows[i][1]);
+        std::string name = std::get<std::string>(result.rows[i][2]);
+        std::cout << "      " << source << " | " << id << " | " << name << std::endl;
+    }
+    if (result.rowCount() > 5) {
+        std::cout << "      ... and " << (result.rowCount() - 5) << " more rows" << std::endl;
+    }
+
+    std::cout << "Multi-source routing test passed!" << std::endl;
+}
+
 void testBatchStreamIngest() {
     std::cout << "Testing batch stream ingest (size-prefixed format)..." << std::endl;
 
@@ -335,6 +434,7 @@ int main() {
         testExportAndReload();
         testIndexedQuery();
         testBatchStreamIngest();
+        testMultiSource();
 
         std::cout << std::endl;
         std::cout << "=== All integration tests passed! ===" << std::endl;

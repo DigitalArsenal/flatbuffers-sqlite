@@ -57,6 +57,10 @@ struct FlatBufferVTab : public sqlite3_vtab {
 
     // Column index for virtual _source column (-1 if not enabled)
     int sourceColumnIndex;
+
+    // Source-specific record infos (for multi-source routing)
+    // When set, uses these instead of store->getRecordInfoVector(fileId)
+    const std::vector<StreamingFlatBufferStore::FileRecordInfo>* sourceRecordInfos;
 };
 
 /**
@@ -180,6 +184,9 @@ struct VTabCreateInfo {
     FastFieldExtractor fastExtractor;
     std::unordered_map<std::string, BTree*> indexes;
     std::unordered_set<uint64_t>* tombstones;
+    // Source-specific record infos (for multi-source routing)
+    // When set, uses these instead of store->getRecordInfoVector(fileId)
+    const std::vector<StreamingFlatBufferStore::FileRecordInfo>* sourceRecordInfos = nullptr;
 };
 
 }  // namespace flatsql

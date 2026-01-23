@@ -97,6 +97,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
                 \"_flatsql_create_db\", \"_flatsql_destroy_db\", \
                 \"_flatsql_register_file_id\", \"_flatsql_enable_demo_extractors\", \
                 \"_flatsql_ingest\", \"_flatsql_ingest_one\", \
+                \"_flatsql_register_source\", \"_flatsql_create_unified_views\", \
+                \"_flatsql_ingest_with_source\", \"_flatsql_ingest_one_with_source\", \
+                \"_flatsql_get_sources_count\", \"_flatsql_get_source_name\", \
                 \"_flatsql_query\", \"_flatsql_get_error\", \
                 \"_flatsql_result_column_count\", \"_flatsql_result_row_count\", \
                 \"_flatsql_result_column_name\", \"_flatsql_result_cell_type\", \
@@ -109,7 +112,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
                 \"_flatsql_get_stats_count\", \"_flatsql_get_stat_table_name\", \
                 \"_flatsql_get_stat_file_id\", \"_flatsql_get_stat_record_count\", \
                 \"_flatsql_mark_deleted\", \"_flatsql_get_deleted_count\", \
-                \"_flatsql_clear_tombstones\" \
+                \"_flatsql_clear_tombstones\", \
+                \"_flatsql_get_flatbuffer_by_id\", \"_flatsql_get_flatbuffer_by_email\", \
+                \"_flatsql_get_raw_flatbuffer_size\", \"_flatsql_get_raw_flatbuffer_sequence\", \
+                \"_flatsql_get_storage_buffer\", \"_flatsql_get_storage_size\" \
             ]' \
             -s EXPORTED_RUNTIME_METHODS='[\"ccall\", \"cwrap\", \"UTF8ToString\", \"stringToUTF8\", \"lengthBytesUTF8\", \"HEAPU8\"]' \
             -s ALLOW_MEMORY_GROWTH=1 \

@@ -61,6 +61,14 @@ export async function initFlatSQL(moduleFactory) {
         markDeleted: Module.cwrap('flatsql_mark_deleted', null, ['number', 'string', 'number']),
         getDeletedCount: Module.cwrap('flatsql_get_deleted_count', 'number', ['number', 'string']),
         clearTombstones: Module.cwrap('flatsql_clear_tombstones', null, ['number', 'string']),
+
+        // Raw FlatBuffer access
+        getFlatBufferById: Module.cwrap('flatsql_get_flatbuffer_by_id', 'number', ['number', 'string', 'number']),
+        getFlatBufferByEmail: Module.cwrap('flatsql_get_flatbuffer_by_email', 'number', ['number', 'string', 'string']),
+        getRawFlatBufferSize: Module.cwrap('flatsql_get_raw_flatbuffer_size', 'number', []),
+        getRawFlatBufferSequence: Module.cwrap('flatsql_get_raw_flatbuffer_sequence', 'number', []),
+        getStorageBuffer: Module.cwrap('flatsql_get_storage_buffer', 'number', ['number']),
+        getStorageSize: Module.cwrap('flatsql_get_storage_size', 'number', ['number']),
     };
 
     return new FlatSQL();
@@ -247,5 +255,56 @@ export class FlatSQLDatabase {
 
     clearTombstones(tableName) {
         api.clearTombstones(this._handle, tableName);
+    }
+
+    // ==================== Raw FlatBuffer Access ====================
+
+    /**
+     * Get raw FlatBuffer pointer and size by table name and id
+     * Returns { ptr: number, size: number, sequence: number } or null if not found
+     * The ptr is a WASM memory address - use with Module.HEAPU8.subarray(ptr, ptr + size)
+     */
+    getFlatBufferById(tableName, id) {
+        const ptr = api.getFlatBufferById(this._handle, tableName, id);
+        if (!ptr) return null;
+        return {
+            ptr: ptr,
+            size: api.getRawFlatBufferSize(),
+            sequence: api.getRawFlatBufferSequence()
+        };
+    }
+
+    /**
+     * Get raw FlatBuffer pointer and size by table name and email
+     * Returns { ptr: number, size: number, sequence: number } or null if not found
+     */
+    getFlatBufferByEmail(tableName, email) {
+        const ptr = api.getFlatBufferByEmail(this._handle, tableName, email);
+        if (!ptr) return null;
+        return {
+            ptr: ptr,
+            size: api.getRawFlatBufferSize(),
+            sequence: api.getRawFlatBufferSequence()
+        };
+    }
+
+    /**
+     * Get a copy of the raw FlatBuffer data as Uint8Array
+     */
+    getFlatBufferDataById(tableName, id) {
+        const info = this.getFlatBufferById(tableName, id);
+        if (!info) return null;
+        return new Uint8Array(Module.HEAPU8.buffer, info.ptr, info.size).slice();
+    }
+
+    /**
+     * Get the underlying storage buffer info
+     * Returns { ptr: number, size: number }
+     */
+    getStorageInfo() {
+        return {
+            ptr: api.getStorageBuffer(this._handle),
+            size: api.getStorageSize(this._handle)
+        };
     }
 }

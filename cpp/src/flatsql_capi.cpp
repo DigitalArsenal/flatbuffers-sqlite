@@ -468,6 +468,61 @@ const char* flatsql_get_source_name(int index) {
     return g_sourcesBuffer[index].c_str();
 }
 
+// ==================== Raw FlatBuffer Access API ====================
+// These functions provide direct memory access to FlatBuffer data
+
+// Global state for raw FlatBuffer access
+static const uint8_t* g_rawFlatBuffer = nullptr;
+static uint32_t g_rawFlatBufferSize = 0;
+static uint64_t g_rawFlatBufferSequence = 0;
+
+// Get raw FlatBuffer pointer by table name and indexed column value
+// Returns pointer to FlatBuffer in WASM memory, or 0 if not found
+// Call flatsql_get_raw_flatbuffer_size() after to get the size
+EMSCRIPTEN_KEEPALIVE
+const uint8_t* flatsql_get_flatbuffer_by_id(void* handle, const char* tableName, int32_t id) {
+    auto* db = static_cast<FlatSQLDatabase*>(handle);
+    g_rawFlatBuffer = db->findRawByIndex(tableName, "id", static_cast<int64_t>(id),
+                                          &g_rawFlatBufferSize, &g_rawFlatBufferSequence);
+    return g_rawFlatBuffer;
+}
+
+// Get raw FlatBuffer pointer by table name and email (string key)
+EMSCRIPTEN_KEEPALIVE
+const uint8_t* flatsql_get_flatbuffer_by_email(void* handle, const char* tableName, const char* email) {
+    auto* db = static_cast<FlatSQLDatabase*>(handle);
+    g_rawFlatBuffer = db->findRawByIndex(tableName, "email", std::string(email),
+                                          &g_rawFlatBufferSize, &g_rawFlatBufferSequence);
+    return g_rawFlatBuffer;
+}
+
+// Get size of the last accessed raw FlatBuffer
+EMSCRIPTEN_KEEPALIVE
+int flatsql_get_raw_flatbuffer_size() {
+    return static_cast<int>(g_rawFlatBufferSize);
+}
+
+// Get sequence (rowid) of the last accessed raw FlatBuffer
+EMSCRIPTEN_KEEPALIVE
+double flatsql_get_raw_flatbuffer_sequence() {
+    return static_cast<double>(g_rawFlatBufferSequence);
+}
+
+// Get the underlying storage buffer pointer (for advanced use)
+// This returns the base address of all FlatBuffer storage
+EMSCRIPTEN_KEEPALIVE
+const uint8_t* flatsql_get_storage_buffer(void* handle) {
+    auto* db = static_cast<FlatSQLDatabase*>(handle);
+    return db->getStorage().getDataBuffer();
+}
+
+// Get the current storage buffer size
+EMSCRIPTEN_KEEPALIVE
+double flatsql_get_storage_size(void* handle) {
+    auto* db = static_cast<FlatSQLDatabase*>(handle);
+    return static_cast<double>(db->getStorage().getDataSize());
+}
+
 }  // extern "C"
 
 #endif  // __EMSCRIPTEN__

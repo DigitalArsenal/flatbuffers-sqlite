@@ -26,6 +26,8 @@ struct SourceInfo {
     std::unordered_map<std::string, BTree*> indexes;  // Not owned
     std::unordered_set<uint64_t> tombstones;      // Owned - deleted sequences
     VTabCreateInfo vtabInfo;                      // Info passed to xCreate
+    // Source-specific record infos pointer (for multi-source routing)
+    const std::vector<StreamingFlatBufferStore::FileRecordInfo>* sourceRecordInfos = nullptr;
 };
 
 /**
@@ -59,6 +61,9 @@ public:
      * @param fileId      File identifier for routing FlatBuffers
      * @param extractor   Callback to extract field values from FlatBuffers
      * @param indexes     Map of column name -> B-tree index
+     * @param fastExtractor Optional fast field extractor
+     * @param batchExtractor Optional batch extractor
+     * @param sourceRecordInfos Optional source-specific record infos (for multi-source routing)
      */
     void registerSource(
         const std::string& sourceName,
@@ -68,7 +73,8 @@ public:
         FieldExtractor extractor,
         const std::unordered_map<std::string, BTree*>& indexes = {},
         FastFieldExtractor fastExtractor = nullptr,
-        BatchExtractor batchExtractor = nullptr
+        BatchExtractor batchExtractor = nullptr,
+        const std::vector<StreamingFlatBufferStore::FileRecordInfo>* sourceRecordInfos = nullptr
     );
 
     /**

@@ -108,7 +108,8 @@ void SQLiteEngine::registerSource(
     FieldExtractor extractor,
     const std::unordered_map<std::string, BTree*>& indexes,
     FastFieldExtractor fastExtractor,
-    BatchExtractor batchExtractor
+    BatchExtractor batchExtractor,
+    const std::vector<StreamingFlatBufferStore::FileRecordInfo>* sourceRecordInfos
 ) {
     if (sources_.count(sourceName)) {
         throw std::runtime_error("Source already registered: " + sourceName);
@@ -123,6 +124,7 @@ void SQLiteEngine::registerSource(
     sourceInfo->extractor = extractor;
     sourceInfo->batchExtractor = batchExtractor;
     sourceInfo->indexes = indexes;
+    sourceInfo->sourceRecordInfos = sourceRecordInfos;
 
     // Set up VTabCreateInfo (pointer will be stable after insert)
     sourceInfo->vtabInfo.store = store;
@@ -133,6 +135,7 @@ void SQLiteEngine::registerSource(
     sourceInfo->vtabInfo.extractor = extractor;
     sourceInfo->vtabInfo.indexes = indexes;
     sourceInfo->vtabInfo.tombstones = &sourceInfo->tombstones;
+    sourceInfo->vtabInfo.sourceRecordInfos = sourceRecordInfos;
 
     // Store before registering (so pointers are stable)
     SourceInfo* infoPtr = sourceInfo.get();
@@ -207,7 +210,21 @@ void SQLiteEngine::createUnifiedView(
         }
     }
 
-    // Build UNION ALL view
+    // Drop existing table/view if it exists (base virtual table or old view)
+    {
+        std::string dropSql = "DROP TABLE IF EXISTS \"" + viewName + "\"";
+        char* errMsg = nullptr;
+        sqlite3_exec(db_, dropSql.c_str(), nullptr, nullptr, &errMsg);
+        sqlite3_free(errMsg);  // Ignore errors
+    }
+    {
+        std::string dropSql = "DROP VIEW IF EXISTS \"" + viewName + "\"";
+        char* errMsg = nullptr;
+        sqlite3_exec(db_, dropSql.c_str(), nullptr, nullptr, &errMsg);
+        sqlite3_free(errMsg);  // Ignore errors
+    }
+
+    // Build UNION ALL view with _source column
     std::ostringstream sql;
     sql << "CREATE VIEW \"" << viewName << "\" AS ";
 

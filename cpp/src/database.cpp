@@ -23,6 +23,9 @@ void TableStore::onIngest(const uint8_t* data, size_t length, uint64_t sequence,
 
     recordCount_++;
 
+    // Track this record for source-specific iteration
+    recordInfos_.push_back({offset, sequence});
+
     if (!fieldExtractor_) {
         return;  // No extractor, can't index
     }
@@ -222,6 +225,7 @@ void FlatSQLDatabase::updateSQLiteTable(const std::string& tableName) {
     }
 
     // Register with SQLite engine
+    // Pass source-specific record infos for multi-source routing
     sqliteEngine_->registerSource(
         tableName,
         &storage_,
@@ -230,7 +234,8 @@ void FlatSQLDatabase::updateSQLiteTable(const std::string& tableName) {
         tableStore->getFieldExtractor(),
         indexes,
         tableStore->getFastFieldExtractor(),
-        tableStore->getBatchExtractor()
+        tableStore->getBatchExtractor(),
+        &tableStore->getRecordInfos()
     );
 
     sqliteRegisteredTables_.insert(tableName);

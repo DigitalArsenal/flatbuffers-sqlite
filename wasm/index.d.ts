@@ -112,6 +112,32 @@ export interface FlatSQLDatabase {
    */
   clearTombstones(tableName: string): void;
 
+  // ==================== Raw FlatBuffer Access ====================
+
+  /**
+   * Get raw FlatBuffer pointer and size by table name and id.
+   * Returns { ptr, size, sequence } or null if not found.
+   * Use the ptr with Module.HEAPU8.subarray(ptr, ptr + size) to access raw bytes.
+   */
+  getFlatBufferById(tableName: string, id: number): { ptr: number; size: number; sequence: number } | null;
+
+  /**
+   * Get raw FlatBuffer pointer and size by table name and email.
+   * Returns { ptr, size, sequence } or null if not found.
+   */
+  getFlatBufferByEmail(tableName: string, email: string): { ptr: number; size: number; sequence: number } | null;
+
+  /**
+   * Get a copy of the raw FlatBuffer data as Uint8Array
+   */
+  getFlatBufferDataById(tableName: string, id: number): Uint8Array | null;
+
+  /**
+   * Get the underlying storage buffer info
+   * Returns { ptr, size } for direct WASM memory access
+   */
+  getStorageInfo(): { ptr: number; size: number };
+
   /**
    * Destroy the database and free memory
    */

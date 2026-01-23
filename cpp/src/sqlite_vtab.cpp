@@ -126,6 +126,7 @@ int FlatBufferVTabModule::xConnect(sqlite3* db, void* pAux, int argc, const char
     vtab->fastExtractor = info->fastExtractor;
     vtab->indexes = info->indexes;
     vtab->tombstones = info->tombstones;
+    vtab->sourceRecordInfos = info->sourceRecordInfos;
     vtab->sourceColumnIndex = static_cast<int>(tableDef.columns.size());  // _source is first virtual column
 
     *ppVTab = vtab;
@@ -323,7 +324,12 @@ int FlatBufferVTabModule::xFilter(sqlite3_vtab_cursor* pCursor, int idxNum, cons
             cursor->scanType = ScanType::FullScan;
             cursor->useLazyScan = false;
             cursor->scanFileIndex = 0;
-            cursor->scanRecordInfos = vtab->store->getRecordInfoVector(vtab->fileId);
+            // Prefer source-specific record infos if available (for multi-source routing)
+            if (vtab->sourceRecordInfos) {
+                cursor->scanRecordInfos = vtab->sourceRecordInfos;
+            } else {
+                cursor->scanRecordInfos = vtab->store->getRecordInfoVector(vtab->fileId);
+            }
             cursor->scanFileCount = cursor->scanRecordInfos ? cursor->scanRecordInfos->size() : 0;
             cursor->scanDataBuffer = vtab->store->getDataBuffer();
             cursor->hasTombstones = vtab->tombstones && !vtab->tombstones->empty();

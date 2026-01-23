@@ -76,6 +76,11 @@ public:
         return it != indexes_.end() ? it->second.get() : nullptr;
     }
 
+    // Get record infos for this specific table (for source-specific iteration)
+    const std::vector<StreamingFlatBufferStore::FileRecordInfo>& getRecordInfos() const {
+        return recordInfos_;
+    }
+
 private:
     TableDef tableDef_;
     std::string fileId_;  // 4-byte file identifier for routing
@@ -85,6 +90,9 @@ private:
     FieldExtractor fieldExtractor_;
     FastFieldExtractor fastFieldExtractor_;
     BatchExtractor batchExtractor_ = nullptr;
+
+    // Per-table record tracking (for source-specific tables)
+    std::vector<StreamingFlatBufferStore::FileRecordInfo> recordInfos_;
 };
 
 /**
