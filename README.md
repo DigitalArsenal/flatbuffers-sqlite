@@ -308,10 +308,12 @@ const db = flatsql.createDatabase(schemaString, 'dbname');
 db.registerFileId('USER', 'User');  // Route "USER" FlatBuffers to User table
 ```
 
-### db.ingest(data)
+### db.ingest(data, source?)
 
 ```typescript
 const bytesConsumed = db.ingest(uint8ArrayStream);
+// Or with source tagging (requires registerSource first):
+const bytesConsumed = db.ingest(uint8ArrayStream, 'satellite-1');
 ```
 
 ### db.query(sql)
@@ -326,6 +328,24 @@ const result = db.query('SELECT * FROM User WHERE age > 25');
 
 ```typescript
 const data = db.exportData();  // Returns Uint8Array
+```
+
+### db.registerSource(sourceName)
+
+```typescript
+db.registerSource('satellite-1');  // Creates User@satellite-1, Post@satellite-1, etc.
+```
+
+### db.createUnifiedViews()
+
+```typescript
+db.createUnifiedViews();  // Creates unified views with _source column
+```
+
+### db.listSources()
+
+```typescript
+const sources = db.listSources();  // ['satellite-1', 'satellite-2', ...]
 ```
 
 ## Multi-Source Queries
@@ -379,44 +399,6 @@ SELECT _source, COUNT(*) as count FROM User GROUP BY _source;
 
 -- Filter by source in unified view
 SELECT * FROM User WHERE _source = 'satellite-1';
-```
-
-### API
-
-#### db.registerSource(sourceName)
-
-Register a named data source. Creates source-specific tables for all schema tables.
-
-```typescript
-db.registerSource('siteA');
-db.registerSource('siteB');
-```
-
-#### db.createUnifiedViews()
-
-Create unified views for cross-source queries. Call after registering all sources and file IDs.
-
-```typescript
-db.createUnifiedViews();
-```
-
-#### db.ingest(data, source)
-
-Ingest data with source tagging. Routes to source-specific tables.
-
-```typescript
-db.ingest(streamA, 'siteA');  // Goes to User@siteA, Post@siteA, etc.
-db.ingest(streamB, 'siteB');  // Goes to User@siteB, Post@siteB, etc.
-db.ingest(streamC);           // Goes to base tables (User, Post)
-```
-
-#### db.listSources()
-
-Get list of registered source names.
-
-```typescript
-const sources = db.listSources();
-// ['siteA', 'siteB']
 ```
 
 ## License
