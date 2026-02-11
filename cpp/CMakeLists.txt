@@ -194,8 +194,83 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
         "
     )
 
+    # Build a standalone WASI-compatible module for Go runtimes (wazero/wasmtime)
+    add_executable(flatsql_wasi ${FLATSQL_WASM_SOURCES} ${SQLITE_DIR}/sqlite3.c)
+
+    target_include_directories(flatsql_wasi PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${FLATBUFFERS_INCLUDE_DIR}
+        ${SQLITE_DIR}
+        ${SQLEAN_DIR}
+    )
+
+    target_compile_definitions(flatsql_wasi PRIVATE
+        SQLITE_THREADSAFE=0
+        SQLITE_OMIT_LOAD_EXTENSION=1
+        SQLITE_OMIT_WAL=1
+        SQLITE_OMIT_DEPRECATED=1
+        SQLITE_OMIT_SHARED_CACHE=1
+        SQLITE_OMIT_PROGRESS_CALLBACK=1
+        SQLITE_DEFAULT_MEMSTATUS=0
+        SQLITE_DQS=0
+        SQLITE_ENABLE_RTREE=1
+    )
+
+    set_target_properties(flatsql_wasi PROPERTIES
+        OUTPUT_NAME "flatsql-wasi"
+        SUFFIX ".wasm"
+        LINK_FLAGS "\
+            -s WASM=1 \
+            -s STANDALONE_WASM=1 \
+            --no-entry \
+            -s EXPORTED_FUNCTIONS='[ \
+                \"_malloc\", \"_free\", \
+                \"_flatsql_create_db\", \"_flatsql_destroy_db\", \
+                \"_flatsql_register_file_id\", \"_flatsql_enable_demo_extractors\", \
+                \"_flatsql_ingest\", \"_flatsql_ingest_one\", \
+                \"_flatsql_register_source\", \"_flatsql_create_unified_views\", \
+                \"_flatsql_ingest_with_source\", \"_flatsql_ingest_one_with_source\", \
+                \"_flatsql_get_sources_count\", \"_flatsql_get_source_name\", \
+                \"_flatsql_query\", \"_flatsql_get_error\", \
+                \"_flatsql_result_column_count\", \"_flatsql_result_row_count\", \
+                \"_flatsql_result_column_name\", \"_flatsql_result_cell_type\", \
+                \"_flatsql_result_cell_number\", \"_flatsql_result_cell_string\", \
+                \"_flatsql_result_cell_blob\", \"_flatsql_result_cell_blob_size\", \
+                \"_flatsql_export_data\", \"_flatsql_export_size\", \
+                \"_flatsql_load_and_rebuild\", \
+                \"_flatsql_create_test_user\", \"_flatsql_create_test_post\", \
+                \"_flatsql_test_buffer_size\", \
+                \"_flatsql_get_stats_count\", \"_flatsql_get_stat_table_name\", \
+                \"_flatsql_get_stat_file_id\", \"_flatsql_get_stat_record_count\", \
+                \"_flatsql_mark_deleted\", \"_flatsql_get_deleted_count\", \
+                \"_flatsql_clear_tombstones\", \
+                \"_flatsql_get_flatbuffer_by_id\", \"_flatsql_get_flatbuffer_by_email\", \
+                \"_flatsql_get_raw_flatbuffer_size\", \"_flatsql_get_raw_flatbuffer_sequence\", \
+                \"_flatsql_get_storage_buffer\", \"_flatsql_get_storage_size\", \
+                \"_flatsql_set_encryption_key\", \"_flatsql_is_encrypted\", \
+                \"_flatsql_encrypt_buffer\", \"_flatsql_decrypt_buffer\", \
+                \"_flatsql_set_hmac_verification\", \"_flatsql_is_hmac_enabled\", \
+                \"_flatsql_compute_hmac\", \"_flatsql_verify_hmac\" \
+            ]' \
+            -s ALLOW_MEMORY_GROWTH=1 \
+            -s INITIAL_MEMORY=16777216 \
+            -s STACK_SIZE=1048576 \
+                        -s FILESYSTEM=0 \
+            -s ALLOW_TABLE_GROWTH=1 \
+            -s EMULATE_FUNCTION_POINTER_CASTS=1 \
+            -fexceptions \
+            -s DISABLE_EXCEPTION_CATCHING=0 \
+        "
+    )
+
+    add_custom_command(TARGET flatsql_wasi POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE_DIR:flatsql_wasi>/flatsql-wasi.wasm
+            ${CMAKE_CURRENT_SOURCE_DIR}/../docs/
+        COMMENT "Copying flatsql-wasi.wasm to docs/"
+    )
     message(STATUS "WASM build configured")
-    message(STATUS "Output: flatsql.js + flatsql.wasm")
+    message(STATUS "Output: flatsql.js + flatsql.wasm + flatsql-wasi.wasm")
 
     # Post-build: copy WASM files to docs/ for GitHub Pages
     add_custom_command(TARGET flatsql POST_BUILD

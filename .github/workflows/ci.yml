@@ -70,5 +70,5 @@ jobs:
 
     - name: Verify WASM Output
       run: |
-        ls -la cpp/build-wasm/flatsql.js cpp/build-wasm/flatsql.wasm
+        ls -la cpp/build-wasm/flatsql.js cpp/build-wasm/flatsql.wasm cpp/build-wasm/flatsql-wasi.wasm
         echo "WASM build successful!"

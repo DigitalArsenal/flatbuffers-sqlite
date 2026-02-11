@@ -58,6 +58,7 @@ jobs:
           mkdir -p wasm
           cp cpp/build-wasm/flatsql.js wasm/ || true
           cp cpp/build-wasm/flatsql.wasm wasm/ || true
+          cp cpp/build-wasm/flatsql-wasi.wasm wasm/ || true
 
       - name: Verify build output
         run: |

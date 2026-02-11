@@ -1,6 +1,6 @@
 {
   "name": "flatsql",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "SQL queries over raw FlatBuffer storage - zero conversion, real-time indexing, pure streaming",
   "type": "module",
   "main": "dist/index.js",
@@ -13,7 +13,12 @@
     "./wasm": {
       "types": "./wasm/index.d.ts",
       "import": "./wasm/index.js"
-    }
+    },
+    "./wasi": {
+      "types": "./wasm/wasi.d.ts",
+      "import": "./wasm/wasi.js"
+    },
+    "./wasi.wasm": "./wasm/flatsql-wasi.wasm"
   },
   "files": [
     "dist",

@@ -39,6 +39,9 @@ cmake --build build-wasm --config Release
 # Copy to wasm/ directory
 echo "Copying WASM files to wasm/..."
 cp build-wasm/flatsql.js build-wasm/flatsql.wasm "$PROJECT_ROOT/wasm/"
+if [ -f build-wasm/flatsql-wasi.wasm ]; then
+    cp build-wasm/flatsql-wasi.wasm "$PROJECT_ROOT/wasm/"
+fi
 
 # Generate integrity hash for WASM file (SHA-384, base64 encoded)
 echo "Generating integrity hash..."
@@ -57,7 +60,7 @@ fi
 
 # Write integrity file
 if [ -n "$WASM_HASH" ]; then
-    cat > "$PROJECT_ROOT/wasm/integrity.json" << EOF
+    cat > "$PROJECT_ROOT/wasm/integrity.json" << EOH
 {
   "algorithm": "sha384",
   "hash": "$WASM_HASH",
@@ -65,7 +68,7 @@ if [ -n "$WASM_HASH" ]; then
   "size": $WASM_SIZE,
   "generatedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
-EOF
+EOH
     echo "Integrity hash written to wasm/integrity.json"
     echo "  SRI: sha384-$WASM_HASH"
 fi
@@ -73,4 +76,8 @@ fi
 echo ""
 echo "WASM build complete!"
 echo "Output files:"
-ls -la "$PROJECT_ROOT/wasm/flatsql.js" "$PROJECT_ROOT/wasm/flatsql.wasm" "$PROJECT_ROOT/wasm/integrity.json" 2>/dev/null || ls -la "$PROJECT_ROOT/wasm/flatsql.js" "$PROJECT_ROOT/wasm/flatsql.wasm"
+if [ -f "$PROJECT_ROOT/wasm/flatsql-wasi.wasm" ]; then
+    ls -la "$PROJECT_ROOT/wasm/flatsql.js" "$PROJECT_ROOT/wasm/flatsql.wasm" "$PROJECT_ROOT/wasm/flatsql-wasi.wasm" "$PROJECT_ROOT/wasm/integrity.json" 2>/dev/null || ls -la "$PROJECT_ROOT/wasm/flatsql.js" "$PROJECT_ROOT/wasm/flatsql.wasm" "$PROJECT_ROOT/wasm/flatsql-wasi.wasm"
+else
+    ls -la "$PROJECT_ROOT/wasm/flatsql.js" "$PROJECT_ROOT/wasm/flatsql.wasm" "$PROJECT_ROOT/wasm/integrity.json" 2>/dev/null || ls -la "$PROJECT_ROOT/wasm/flatsql.js" "$PROJECT_ROOT/wasm/flatsql.wasm"
+fi
