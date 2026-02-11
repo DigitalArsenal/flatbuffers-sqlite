@@ -176,23 +176,40 @@ export function parseFlatBufferIDL(source: string): ParsedSchema {
     }
 
     // Enum
-    const enumMatch = line.match(/^enum\s+(\w+)\s*:\s*\w+\s*\{/);
+    const enumMatch = line.match(/^enum\s+(\w+)\s*:\s*\w+\s*\{(.*)$/);
     if (enumMatch) {
       const enumName = enumMatch[1];
       const values: string[] = [];
-      i++;
 
-      while (i < lines.length) {
-        const enumLine = lines[i].trim();
-        if (enumLine === '}') {
+      const addEnumValues = (chunk: string) => {
+        for (const part of chunk.split(',')) {
+          const token = part
+            .replace(/\/\/.*$/, '')
+            .trim()
+            .split('=')[0]
+            .trim();
+          if (/^\w+$/.test(token)) {
+            values.push(token);
+          }
+        }
+      };
+
+      // Handle both single-line and multi-line enum bodies.
+      let remainder = enumMatch[2] ?? '';
+      while (true) {
+        const closeIndex = remainder.indexOf('}');
+        if (closeIndex >= 0) {
+          addEnumValues(remainder.slice(0, closeIndex));
           i++;
           break;
         }
-        const valueMatch = enumLine.match(/^(\w+)/);
-        if (valueMatch) {
-          values.push(valueMatch[1]);
-        }
+
+        addEnumValues(remainder);
         i++;
+        if (i >= lines.length) {
+          break;
+        }
+        remainder = lines[i].trim();
       }
 
       result.enums.set(enumName, values);
